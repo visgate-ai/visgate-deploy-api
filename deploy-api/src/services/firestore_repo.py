@@ -77,9 +77,31 @@ def get_api_key(
     key: str,
 ) -> Optional[dict]:
     """Retrieve API key document."""
-    # Assuming key is the document ID for O(1) lookup
-    # Alternatively, could be a field query if keys are hashed secrets
     doc = client.collection(collection).document(key).get()
     if not doc.exists:
         return None
     return doc.to_dict()
+
+
+def get_gpu_registry(
+    client: firestore.Client,
+    collection: str = "gpu_registry",
+) -> list[dict]:
+    """Fetch list of GPU specifications from Firestore."""
+    docs = client.collection(collection).stream()
+    return [doc.to_dict() for doc in docs]
+
+
+def get_tier_mapping(
+    client: firestore.Client,
+    collection: str = "gpu_tiers",
+) -> dict[str, list[str]]:
+    """Fetch tier to GPU ID mappings from Firestore."""
+    docs = client.collection(collection).stream()
+    mapping = {}
+    for doc in docs:
+        data = doc.to_dict()
+        name = doc.id.upper()
+        ids = data.get("gpu_ids", [])
+        mapping[name] = ids
+    return mapping

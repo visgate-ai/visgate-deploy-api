@@ -26,6 +26,8 @@ from src.services.firestore_repo import (
     append_log,
     get_deployment,
     get_firestore_client,
+    get_gpu_registry,
+    get_tier_mapping,
     update_deployment,
 )
 from src.services.huggingface import validate_model
@@ -82,7 +84,9 @@ async def orchestrate_deployment(deployment_id: str) -> None:
 
         # 2. Select GPU
         update_deployment(client, coll, deployment_id, {"status": "selecting_gpu"})
-        gpu_id, gpu_display = select_gpu(vram_gb, gpu_tier)
+        registry = get_gpu_registry(client, settings.firestore_collection_gpu_registry)
+        tier_mapping = get_tier_mapping(client, settings.firestore_collection_gpu_tiers)
+        gpu_id, gpu_display = select_gpu(vram_gb, gpu_tier, registry=registry, tier_mapping=tier_mapping)
         log_step("INFO", f"Selected GPU: {gpu_display}", gpu_id=gpu_id)
 
         # 3. Create Runpod endpoint

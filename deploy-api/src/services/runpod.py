@@ -235,15 +235,17 @@ async def delete_endpoint(
 def select_gpu(
     vram_gb: int,
     gpu_tier: Optional[str] = None,
+    registry: Optional[list] = None,
+    tier_mapping: Optional[dict] = None,
 ) -> tuple[str, str]:
     """
     Select Runpod gpuId and display name for required VRAM.
     Returns (gpu_id, display_name). Raises RunpodInsufficientGPUError if none.
     """
-    gpu_id = select_gpu_id_for_vram(vram_gb, gpu_tier)
+    gpu_id = select_gpu_id_for_vram(vram_gb, gpu_tier, registry=registry, tier_mapping=tier_mapping)
     if not gpu_id:
         raise RunpodInsufficientGPUError(vram_gb)
-    display = gpu_id_to_display_name(gpu_id)
+    display = gpu_id_to_display_name(gpu_id, registry=registry)
     return gpu_id, display
 
 

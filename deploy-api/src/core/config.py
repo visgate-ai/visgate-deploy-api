@@ -44,6 +44,16 @@ class Settings(BaseSettings):
         min_length=1,
         description="Firestore collection for API keys",
     )
+    firestore_collection_gpu_registry: str = Field(
+        default="gpu_registry",
+        min_length=1,
+        description="Firestore collection for GPU specifications",
+    )
+    firestore_collection_gpu_tiers: str = Field(
+        default="gpu_tiers",
+        min_length=1,
+        description="Firestore collection for GPU tier mappings",
+    )
 
     # Runpod
     docker_image: str = Field(
