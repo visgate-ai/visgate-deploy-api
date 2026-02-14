@@ -163,9 +163,8 @@ def _build_save_endpoint_input(
         "workersMax": workers_max,
         "networkVolumeId": "",
     }
-    # Endpoint-level env: GraphQL EndpointInput may expect object { KEY: value }, not array
     if env:
-        input_dict["env"] = {k: str(v) for k, v in env.items() if v is not None}
+        input_dict["env"] = _env_dict_to_runpod_list(env)
     return input_dict
 
 
