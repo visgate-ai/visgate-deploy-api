@@ -3,7 +3,7 @@ requires = ["setuptools>=61"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "deployment-orchestrator"
+name = "visgate-deploy-api"
 version = "1.0.0"
 description = "GCP Cloud Run deployment orchestrator for Hugging Face + Runpod"
 readme = "README.md"

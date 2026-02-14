@@ -9,8 +9,8 @@ on:
 env:
   PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }} # visgate
   REGION: us-central1 # Cheaper/Standard region
-  SERVICE_NAME: deployment-orchestrator
-  IMAGE: gcr.io/${{ secrets.GCP_PROJECT_ID }}/deployment-orchestrator:${{ github.sha }}
+  SERVICE_NAME: visgate-deploy-api
+  IMAGE: gcr.io/${{ secrets.GCP_PROJECT_ID }}/visgate-deploy-api:${{ github.sha }}
 
 jobs:
   deploy:
@@ -39,7 +39,7 @@ jobs:
 
       - name: Build and Push Container
         run: |
-          docker build -t $IMAGE -f deployment-orchestrator/Dockerfile deployment-orchestrator
+          docker build -t $IMAGE -f deploy-api/Dockerfile deploy-api
           docker push $IMAGE
 
       - name: Deploy to Cloud Run
@@ -50,9 +50,9 @@ jobs:
           region: ${{ env.REGION }}
           env_vars: |
             GCP_PROJECT_ID=${{ env.PROJECT_ID }}
-            FIRESTORE_COLLECTION_DEPLOYMENTS=serverless_visgate_deployments
-            FIRESTORE_COLLECTION_LOGS=serverless_visgate_logs
-            FIRESTORE_COLLECTION_API_KEYS=serverless_visgate_api_keys
+            FIRESTORE_COLLECTION_DEPLOYMENTS=visgate_deploy_api_deployments
+            FIRESTORE_COLLECTION_LOGS=visgate_deploy_api_logs
+            FIRESTORE_COLLECTION_API_KEYS=visgate_deploy_api_api_keys
             GCP_LOCATION=${{ env.REGION }}
             CLOUD_TASKS_QUEUE_PATH=projects/${{ env.PROJECT_ID }}/locations/${{ env.REGION }}/queues/visgate-orchestrator-queue
             LOG_LEVEL=INFO

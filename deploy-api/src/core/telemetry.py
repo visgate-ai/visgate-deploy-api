@@ -28,7 +28,7 @@ _metrics: dict[str, list[float] | int] = {
 }
 
 
-def get_tracer(name: str = "deployment-orchestrator") -> Any:
+def get_tracer(name: str = "visgate-deploy-api") -> Any:
     """Return OpenTelemetry tracer or no-op."""
     if _OTEL_AVAILABLE and trace is not None:
         return trace.get_tracer(name)
@@ -51,7 +51,7 @@ def get_trace_context() -> dict[str, str]:
     return {"trace_id": format(ctx.trace_id, "032x"), "span_id": format(ctx.span_id, "016x")}
 
 
-def init_telemetry(service_name: str = "deployment-orchestrator", project_id: Optional[str] = None) -> None:
+def init_telemetry(service_name: str = "visgate-deploy-api", project_id: Optional[str] = None) -> None:
     """Initialize Cloud Trace exporter and tracer provider."""
     if not _OTEL_AVAILABLE:
         return
@@ -108,7 +108,7 @@ def span(name: str, attributes: Optional[dict[str, Any]] = None) -> Generator[An
     if not _OTEL_AVAILABLE or trace is None:
         yield None
         return
-    tracer = trace.get_tracer("deployment-orchestrator")
+    tracer = trace.get_tracer("visgate-deploy-api")
     with tracer.start_as_current_span(name) as span_obj:
         if attributes:
             for key, val in attributes.items():

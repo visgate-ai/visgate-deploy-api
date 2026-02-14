@@ -76,4 +76,4 @@ def test_root(client: TestClient) -> None:
     """GET / returns service info."""
     resp = client.get("/")
     assert resp.status_code == 200
-    assert "deployment-orchestrator" in resp.json().get("service", "")
+    assert "visgate-deploy-api" in resp.json().get("service", "")

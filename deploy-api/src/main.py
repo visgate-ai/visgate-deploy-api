@@ -24,7 +24,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="Deployment Orchestrator",
+    title="Visgate Deploy API",
     description="GCP Cloud Run deployment orchestrator for Hugging Face + Runpod",
     version="1.0.0",
     lifespan=lifespan,
@@ -61,4 +61,4 @@ async def orchestrator_error_handler(request: Request, exc: OrchestratorError) -
 @app.get("/")
 async def root() -> dict:
     """Root redirect or info."""
-    return {"service": "deployment-orchestrator", "docs": "/docs"}
+    return {"service": "visgate-deploy-api", "docs": "/docs"}

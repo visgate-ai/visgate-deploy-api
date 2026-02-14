@@ -1,43 +1,41 @@
 # Visgate Deploy API
 
-**Visgate Serverless**, Hugging Face üzerindeki diffusion modellerini (Flux, SDXL vb.) **Runpod Serverless** üzerinde çalıştırmanızı sağlayan açık kaynaklı bir araçtır.
+**Visgate Deploy API** is an open-source tool that allows you to run Hugging Face diffusion models (Flux, SDXL, etc.) on **Runpod Serverless** infrastructure with ease.
 
-Bizim sağladığımız **ücretsiz Orchestrator API** sayesinde, kendi sunucunuzu veya bulut altyapınızı kurmanıza gerek kalmadan modelleri deploy edebilirsiniz. Sadece Runpod API Key'iniz yeterlidir.
-
----
-
-## 🚀 Nasıl Çalışır?
-
-1.  **İstek Atın:** Bizim API endpoint'imize (`POST /v1/deployments`) istediğiniz modeli ve Runpod key'inizi gönderin.
-2.  **Orchestrator İşlesin:** Sistemimiz Runpod hesabınızda gerekli ayarları yapar ve modeli hazırlar.
-3.  **Webhook Bekleyin:** Model hazır olduğunda, belirttiğiniz URL'e bir webhook göndeririz.
-4.  **Kullanın:** Webhook ile gelen endpoint adresine istek atarak görsel üretmeye başlayın.
+With our **Hosted Orchestrator API**, you can deploy models without setting up your own server or cloud infrastructure. All you need is your Runpod API Key.
 
 ---
 
-## 🔌 API Kullanımı (Hosted Service)
+## 🚀 How It Works
 
-Aşağıdaki API adresi herkesin kullanımına açıktır.
+1.  **Request:** Send the desired model ID and your Runpod key to our API endpoint (`POST /v1/deployments`).
+2.  **Orchestration:** Our system configures the Runpod template and endpoint in your account and prepares the model.
+3.  **Webhook:** Once the model is loaded and ready, we send a webhook to your specified URL.
+4.  **Inference:** Use the provided endpoint URL from the webhook to generate images.
 
-**Base URL:** `https://api.visgate.io` (Örnek URL - Deployment sonrası güncellenecek)
+---
 
-### 1. Deployment Oluşturma
+## 🔌 API Usage (Hosted Service)
+
+**Base URL:** `https://api.visgate.io` (Example URL - Update after deployment)
+
+### 1. Create Deployment
 
 **POST** `/v1/deployments`
-**Header:** `Authorization: Bearer <VISGATE_API_KEY>` (Discord/Community üzerinden talep edin)
+**Header:** `Authorization: Bearer <VISGATE_API_KEY>`
 
 ```json
 {
   "hf_model_id": "black-forest-labs/FLUX.1-schnell",
   "user_runpod_key": "YOUR_RUNPOD_API_KEY",
   "user_webhook_url": "https://your-server.com/webhook",
-  "gpu_tier": "3090" // Opsiyonel (3090, A40, A100 vb.)
+  "gpu_tier": "3090" // Optional (3090, A40, A100, etc.)
 }
 ```
 
-### 2. Webhook Yanıtı (Başarılı)
+### 2. Webhook Response (Ready)
 
-Model hazır olduğunda `user_webhook_url` adresine şu JSON gelir:
+When the model is ready, your `user_webhook_url` will receive this JSON:
 
 ```json
 {
@@ -65,9 +63,9 @@ Model hazır olduğunda `user_webhook_url` adresine şu JSON gelir:
 }
 ```
 
-### 3. Görsel Üretme (Runpod)
+### 3. Generate Image (Inference)
 
-Webhook'tan gelen URL'e istek atın:
+Send a request to the URL received in the webhook:
 
 ```bash
 curl -X POST https://api.runpod.ai/v2/xxxx-xxxx/run \
@@ -83,16 +81,16 @@ curl -X POST https://api.runpod.ai/v2/xxxx-xxxx/run \
 
 ---
 
-## 🛠️ Kendi Bünyenizde Çalıştırma (Self-Hosting)
+## 🛠️ Self-Hosting
 
-Eğer bu servisi kendiniz (GCP Cloud Run üzerinde) barındırmak isterseniz:
+If you wish to host this service yourself on your own GCP project:
 
-1.  **deployment-orchestrator:** GCP Cloud Run'a deploy edin. Firestore, Cloud Tasks ve Secret Manager gerektirir.
-2.  **inference:** Docker image'ını build edip Docker Hub'a atın.
-3.  Detaylı kurulum rehberi için [deployment-orchestrator/README.md](deployment-orchestrator/README.md) dosyasına bakın.
+1.  **deployment-orchestrator:** Deploy to GCP Cloud Run. Requires Firestore, Cloud Tasks, and Secret Manager.
+2.  **inference:** Build the Docker image and push to Docker Hub.
+3.  See [deployment-orchestrator/README.md](deployment-orchestrator/README.md) for detailed setup instructions.
 
 ---
 
-## 📜 Lisans
+## 📜 License
 
 MIT License.

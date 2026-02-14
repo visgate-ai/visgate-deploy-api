@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# Deploy deployment-orchestrator to GCP Cloud Run and set up resources.
+# Deploy visgate-deploy-api to GCP Cloud Run and set up resources.
 # Usage: ./deploy.sh [REGION]
 
 set -euo pipefail
 
-REGION="${1:-europe-west1}"
+REGION="${1:-us-central1}"
 PROJECT_ID="${GCP_PROJECT_ID:-visgate}"
-SERVICE_NAME="deployment-orchestrator"
+SERVICE_NAME="visgate-deploy-api"
 IMAGE="gcr.io/${PROJECT_ID}/${SERVICE_NAME}:latest"
 
 echo "Project: ${PROJECT_ID} Region: ${REGION}"
@@ -21,7 +21,7 @@ gcloud services enable run.googleapis.com containerregistry.googleapis.com fires
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 cd "${REPO_ROOT}"
-gcloud builds submit --tag "${IMAGE}" deployment-orchestrator
+gcloud builds submit --tag "${IMAGE}" deploy-api
 
 # Optional: RUNPOD_TEMPLATE_ID (from scripts/create_runpod_template.py), INTERNAL_WEBHOOK_BASE_URL (Cloud Run URL for container callback)
 EXTRA_ENV=""
@@ -43,9 +43,9 @@ gcloud run deploy "${SERVICE_NAME}" \
   --platform managed \
   --allow-unauthenticated \
   --set-env-vars "GCP_PROJECT_ID=${PROJECT_ID}" \
-  --set-env-vars "FIRESTORE_COLLECTION_DEPLOYMENTS=deployments" \
-  --set-env-vars "FIRESTORE_COLLECTION_LOGS=deployment_logs" \
-  --set-env-vars "FIRESTORE_COLLECTION_API_KEYS=api_keys" \
+  --set-env-vars "FIRESTORE_COLLECTION_DEPLOYMENTS=visgate_deploy_api_deployments" \
+  --set-env-vars "FIRESTORE_COLLECTION_LOGS=visgate_deploy_api_logs" \
+  --set-env-vars "FIRESTORE_COLLECTION_API_KEYS=visgate_deploy_api_api_keys" \
   --set-env-vars "CLOUD_TASKS_QUEUE_PATH=${CLOUD_TASKS_QUEUE_PATH}" \
   --set-env-vars "GCP_LOCATION=${REGION}" \
   --set-env-vars "LOG_LEVEL=INFO" \
@@ -56,5 +56,5 @@ gcloud run deploy "${SERVICE_NAME}" \
 SERVICE_URL=$(gcloud run services describe "${SERVICE_NAME}" --region "${REGION}" --project "${PROJECT_ID}" --format='value(status.url)' 2>/dev/null || true)
 echo "Deployed. API: ${SERVICE_URL:-unknown}"
 if [[ -z "${INTERNAL_WEBHOOK_BASE_URL:-}" && -n "${SERVICE_URL}" ]]; then
-  echo "To let Runpod containers callback: Cloud Run Console → deployment-orchestrator → Edit → Variables → INTERNAL_WEBHOOK_BASE_URL=${SERVICE_URL}"
+  echo "To let Runpod containers callback: Cloud Run Console → ${SERVICE_NAME} → Edit → Variables → INTERNAL_WEBHOOK_BASE_URL=${SERVICE_URL}"
 fi

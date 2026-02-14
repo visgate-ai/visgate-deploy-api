@@ -11,7 +11,7 @@ steps:
         apt-get update && apt-get install -y curl
         pip install pytest pytest-asyncio httpx
         pip install -r requirements.txt
-    dir: deployment-orchestrator
+    dir: deploy-api
 
   - name: "python:3.11-slim"
     id: test
@@ -19,7 +19,7 @@ steps:
     args:
       - -c
       - |
-        cd deployment-orchestrator && pip install -q -r requirements.txt && PYTHONPATH=. python3 -m pytest tests/ -v --tb=short -x || true
+        cd deploy-api && pip install -q -r requirements.txt && PYTHONPATH=. python3 -m pytest tests/ -v --tb=short -x || true
     dir: .
 
   - name: "gcr.io/cloud-builders/docker"
@@ -27,17 +27,17 @@ steps:
     args:
       - "build"
       - "-t"
-      - "gcr.io/${PROJECT_ID}/deployment-orchestrator:${SHORT_SHA}"
+      - "gcr.io/${PROJECT_ID}/visgate-deploy-api:${SHORT_SHA}"
       - "-f"
-      - "deployment-orchestrator/Dockerfile"
-      - "deployment-orchestrator"
+      - "deploy-api/Dockerfile"
+      - "deploy-api"
     dir: .
 
   - name: "gcr.io/cloud-builders/docker"
     id: push
     args:
       - "push"
-      - "gcr.io/${PROJECT_ID}/deployment-orchestrator:${SHORT_SHA}"
+      - "gcr.io/${PROJECT_ID}/visgate-deploy-api:${SHORT_SHA}"
     dir: .
 
   - name: "gcr.io/google.com/cloudsdktool/cloud-sdk"
@@ -46,11 +46,11 @@ steps:
     args:
       - "run"
       - "deploy"
-      - "deployment-orchestrator"
+      - "visgate-deploy-api"
       - "--image"
-      - "gcr.io/${PROJECT_ID}/deployment-orchestrator:${SHORT_SHA}"
+      - "gcr.io/${PROJECT_ID}/visgate-deploy-api:${SHORT_SHA}"
       - "--region"
-      - "europe-west1"
+      - "us-central1"
       - "--platform"
       - "managed"
       - "--allow-unauthenticated"
@@ -60,4 +60,4 @@ options:
   logging: CLOUD_LOGGING_ONLY
 
 substitutions:
-  _REGION: europe-west1
+  _REGION: us-central1
