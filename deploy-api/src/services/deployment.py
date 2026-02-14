@@ -30,19 +30,17 @@ from src.services.firestore_repo import (
     get_tier_mapping,
     update_deployment,
 )
+from src.services.gpu_selection import select_gpu
 from src.services.huggingface import validate_model
-from src.services.runpod import create_endpoint, endpoint_run_url, select_gpu
+from src.services.provider_factory import get_provider
 from src.services.webhook import notify
-
 
 def _now_iso() -> str:
     return datetime.now(UTC).isoformat().replace("+00:00", "Z")
 
-
 async def orchestrate_deployment(deployment_id: str) -> None:
     """
-    Background task: validate HF model -> select GPU -> create Runpod endpoint.
-    Status 'ready' and user webhook are triggered by POST /internal/deployment-ready/{id}.
+    Background task: validate HF model -> select GPU -> create cloud endpoint via provider.
     """
     settings = get_settings()
     client = get_firestore_client(settings.gcp_project_id)
@@ -69,9 +67,12 @@ async def orchestrate_deployment(deployment_id: str) -> None:
 
         hf_model_id = doc.hf_model_id
         user_webhook_url = doc.user_webhook_url
-        user_runpod_key = doc.user_runpod_key_ref  # stored as key or secret ref
+        user_runpod_key = doc.user_runpod_key_ref
         gpu_tier = doc.gpu_tier
-        hf_token: Optional[str] = doc.hf_token_ref  # or resolve from Secret Manager
+        hf_token: Optional[str] = doc.hf_token_ref
+        # Logic: Default to runpod for now, but could be fetched from doc metadata
+        provider_name = "runpod" 
+        provider = get_provider(provider_name)
 
         # 1. Validate HF model
         update_deployment(client, coll, deployment_id, {"status": "validating"})
@@ -87,57 +88,51 @@ async def orchestrate_deployment(deployment_id: str) -> None:
         registry = get_gpu_registry(client, settings.firestore_collection_gpu_registry)
         tier_mapping = get_tier_mapping(client, settings.firestore_collection_gpu_tiers)
         gpu_id, gpu_display = select_gpu(vram_gb, gpu_tier, registry=registry, tier_mapping=tier_mapping)
-        log_step("INFO", f"Selected GPU: {gpu_display}", gpu_id=gpu_id)
+        log_step("INFO", f"Selected GPU: {gpu_display}", gpu_id=gpu_id, provider=provider_name)
 
-        # 3. Create Runpod endpoint
+        # 3. Create Cloud Endpoint
         update_deployment(client, coll, deployment_id, {"status": "creating_endpoint"})
-        template_id = settings.runpod_template_id or "placeholder"
-        if not template_id:
-            update_deployment(
-                client,
-                coll,
-                deployment_id,
-                {"status": "failed", "error": "RUNPOD_TEMPLATE_ID not configured"},
-            )
-            log_step("ERROR", "RUNPOD_TEMPLATE_ID not set")
-            return
-
+        
         env = {
             "HF_MODEL_ID": hf_model_id,
         }
         if hf_token:
             env["HF_TOKEN"] = hf_token
-        # Internal webhook URL: caller must set INTERNAL_WEBHOOK_BASE or we use relative
+        
         internal_base = getattr(settings, "internal_webhook_base_url", "") or ""
         visgate_webhook = f"{internal_base}/internal/deployment-ready/{deployment_id}"
         env["VISGATE_WEBHOOK"] = visgate_webhook
 
-        result = await create_endpoint(
-            api_key=user_runpod_key,
+        # Common data for all providers
+        endpoint_data = await provider.create_endpoint(
             name=f"visgate-{deployment_id}",
-            template_id=template_id,
-            gpu_ids=gpu_id,
+            gpu_id=gpu_id,
+            image=settings.docker_image,
             env=env,
-            url=settings.runpod_graphql_url,
-            max_retries=settings.runpod_max_retries,
-            workers_max=1,
+            api_key=user_runpod_key,
+            # Runpod specific kwargs
+            template_id=settings.runpod_template_id,
+            workers_max=1
         )
-        runpod_endpoint_id = result.get("id")
-        endpoint_url = endpoint_run_url(runpod_endpoint_id) if runpod_endpoint_id else None
+        
+        endpoint_id = endpoint_data["id"]
+        endpoint_url = endpoint_data["url"]
+        
         update_deployment(
             client,
             coll,
             deployment_id,
             {
-                "runpod_endpoint_id": runpod_endpoint_id,
+                "runpod_endpoint_id": endpoint_id,
                 "endpoint_url": endpoint_url,
                 "gpu_allocated": gpu_display,
+                "provider": provider_name
             },
         )
         log_step(
             "INFO",
-            "Runpod endpoint created",
-            runpod_endpoint_id=runpod_endpoint_id,
+            f"{provider_name.capitalize()} endpoint created",
+            endpoint_id=endpoint_id,
             endpoint_url=endpoint_url,
         )
         # Status stays creating_endpoint until container calls /internal/deployment-ready
