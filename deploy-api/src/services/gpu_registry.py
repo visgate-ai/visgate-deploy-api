@@ -10,7 +10,7 @@ GPU_TIER_TO_RUNPOD: dict[str, list[str]] = {
     "L40": ["ADA_24"],
     "L4": ["ADA_24"],
     "RTX4090": ["ADA_24"],
-    "default": ["AMPERE_16", "AMPERE_24", "ADA_24"],
+    "default": ["AMPERE_24", "ADA_24", "AMPERE_16"],
 }
 
 # Runpod gpuId -> approximate VRAM GB for selection
