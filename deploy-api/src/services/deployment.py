@@ -33,6 +33,7 @@ from src.services.firestore_repo import (
 from src.services.gpu_selection import select_gpu
 from src.services.huggingface import validate_model
 from src.services.provider_factory import get_provider
+import src.services.runpod # Trigger registration
 from src.services.webhook import notify
 
 def _now_iso() -> str:

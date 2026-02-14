@@ -21,6 +21,7 @@ from src.services.deployment import orchestrate_deployment
 from src.services.firestore_repo import get_deployment, set_deployment
 from src.services.model_resolver import get_hf_name
 from src.services.provider_factory import get_provider
+import src.services.runpod # Register providers
 from src.services.tasks import enqueue_orchestration_task
 
 router = APIRouter(prefix="/v1/deployments", tags=["deployments"])
