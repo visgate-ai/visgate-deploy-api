@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """
-Sadece GCP API'mize istek atar; HF, Runpod, Docker Hub'a biz dokunmayız.
-API'ye: keyler (Runpod, isteğe bağlı HF) + HF model adı. Cevabı webhook ile alırız.
+Sends a request to our GCP API; we do not touch HF, Runpod, or Docker Hub directly from here.
+Input: keys (Runpod, optional HF) + HF model ID. The response is received via webhook.
 
-Kullanım:
+Usage:
   python3 scripts/deploy_via_api.py
-  # .env.local'dan RUNPOD, isteğe bağlı HF okunur.
-  # HF model: hf_model_id veya model_name (örn. FLUX.1-schnell) verebilirsiniz.
+  # Reads RUNPOD and optional HF from .env.local.
+  # Provide HF model: hf_model_id or model_name (e.g. FLUX.1-schnell).
 """
 import json
 import os
@@ -19,12 +19,12 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 REPO_ROOT = os.path.abspath(os.path.join(SCRIPT_DIR, ".."))
 ENV_LOCAL = os.path.join(REPO_ROOT, ".env.local")
 
-# Bizim GCP API (tek giriş noktası)
-API_BASE = os.environ.get("VISGATE_API_URL", "https://deployment-orchestrator-93820292919.europe-west1.run.app")
-# Bearer token (API herhangi bir token kabul ediyor)
+# Our GCP API (the only entry point)
+API_BASE = os.environ.get("VISGATE_API_URL", "https://visgate-deploy-api-93820292919.europe-west1.run.app")
+# Bearer token (API accepts any valid key from Firestore)
 API_BEARER = os.environ.get("VISGATE_API_BEARER", "visgate")
 
-# Varsayılan model (HF model ID veya model_name) - sdxl-turbo: daha küçük, hızlı
+# Default model (HF model ID or model_name) - sdxl-turbo: smaller, faster
 DEFAULT_HF_MODEL = os.environ.get("HF_MODEL", "stabilityai/sdxl-turbo")
 
 
@@ -41,7 +41,7 @@ def load_env():
 
 
 def create_webhook_url():
-    """Webhook.site ile tek kullanımlık URL al."""
+    """Get a single-use URL from Webhook.site."""
     req = urllib.request.Request(
         "https://webhook.site/token",
         data=b"{}",
@@ -52,12 +52,12 @@ def create_webhook_url():
         data = json.loads(r.read().decode())
     uuid = data.get("uuid")
     if not uuid:
-        raise RuntimeError("Webhook.site token alınamadı: " + str(data))
+        raise RuntimeError("Could not get Webhook.site token: " + str(data))
     return f"https://webhook.site/{uuid}", uuid
 
 
 def api_post(path, body):
-    """GCP API'mize POST at."""
+    """POST to our GCP API."""
     url = f"{API_BASE.rstrip('/')}{path}"
     data = json.dumps(body).encode()
     req = urllib.request.Request(
@@ -74,7 +74,7 @@ def api_post(path, body):
 
 
 def api_get(path):
-    """GCP API'den GET."""
+    """GET from our GCP API."""
     url = f"{API_BASE.rstrip('/')}{path}"
     req = urllib.request.Request(
         url,
@@ -86,7 +86,7 @@ def api_get(path):
 
 
 def get_webhook_requests(token_uuid):
-    """Webhook.site'ta gelen istekleri al (en yeni)."""
+    """Get requests received at Webhook.site (newest first)."""
     url = f"https://webhook.site/token/{token_uuid}/requests?sorting=newest&per_page=5"
     req = urllib.request.Request(url, headers={"Accept": "application/json"}, method="GET")
     with urllib.request.urlopen(req, timeout=10) as r:
@@ -100,14 +100,14 @@ def main():
     hf_token = env.get("HF", "").strip() or None
 
     if not runpod_key:
-        print("HATA: .env.local içinde RUNPOD=... tanımlayın.", file=sys.stderr)
+        print("ERROR: Set RUNPOD=... in .env.local.", file=sys.stderr)
         sys.exit(1)
 
-    # Webhook URL (orchestrator cevabı buraya POST edecek)
+    # Webhook URL (orchestrator will POST the response here)
     webhook_url, token_uuid = create_webhook_url()
-    print("Webhook URL (cevap buraya gelecek):", webhook_url)
+    print("Webhook URL (response will arrive here):", webhook_url)
 
-    # Model: hf_model_id kullan (doğrudan HF model ID)
+    # Model: use hf_model_id (Direct HF model ID)
     hf_model = os.environ.get("HF_MODEL", DEFAULT_HF_MODEL)
     body = {
         "hf_model_id": hf_model,
@@ -117,30 +117,30 @@ def main():
     if hf_token:
         body["hf_token"] = hf_token
 
-    print("GCP API'ye gönderiliyor (sadece bizim API; HF/Runpod/Docker Hub API'ye gidilmiyor)...")
+    print("Sending to GCP API (Inference Orchestrator)...")
     try:
         resp = api_post("/v1/deployments", body)
     except urllib.error.HTTPError as e:
-        print("API hatası:", e.code, e.read().decode()[:500], file=sys.stderr)
+        print("API Error:", e.code, e.read().decode()[:500], file=sys.stderr)
         sys.exit(1)
 
     deployment_id = resp.get("deployment_id")
     if not deployment_id:
-        print("API yanıtında deployment_id yok:", resp, file=sys.stderr)
+        print("Deployment ID missing in response:", resp, file=sys.stderr)
         sys.exit(1)
 
-    print("Deployment oluşturuldu:", deployment_id)
+    print("Deployment created:", deployment_id)
     print("Model:", resp.get("model_id"), "| Webhook:", resp.get("webhook_url"))
-    print("Cevap webhook ile bekleniyor (veya API'den status poll)...")
+    print("Waiting for response via webhook (or status poll)...")
 
-    # 1) Webhook.site'tan gelen isteği bekle (orchestrator ready olunca POST atar)
-    # 2) Zaman aşımına kadar poll: önce webhook, yoksa GET /v1/deployments/{id}
-    deadline = time.monotonic() + 600  # 10 dk
+    # 1) Wait for webhook POST from orchestrator when ready
+    # 2) Poll status from API until deadline
+    deadline = time.monotonic() + 600  # 10 min
     last_status = None
     webhook_received = None
 
     while time.monotonic() < deadline:
-        # Webhook'ta yeni istek var mı?
+        # Check for new requests at Webhook.site
         for req in get_webhook_requests(token_uuid):
             try:
                 content = req.get("content") or ""
@@ -151,12 +151,12 @@ def main():
             except (json.JSONDecodeError, TypeError):
                 pass
         if webhook_received:
-            print("\n--- Webhook ile gelen cevap ---")
+            print("\n--- Response received via Webhook ---")
             print(json.dumps(webhook_received, indent=2, ensure_ascii=False))
-            print("Endpoint URL (inference için):", webhook_received.get("endpoint_url"))
+            print("Endpoint URL (for inference):", webhook_received.get("endpoint_url"))
             return
 
-        # Fallback: API'den status oku
+        # Fallback: poll status from API
         try:
             doc = api_get(f"/v1/deployments/{deployment_id}")
             status = doc.get("status")
@@ -164,18 +164,18 @@ def main():
                 print("  status:", status)
                 last_status = status
             if status == "ready":
-                print("\n--- API'den durum (ready) ---")
+                print("\n--- Response received via API (ready) ---")
                 print("endpoint_url:", doc.get("endpoint_url"))
                 return
             if status == "failed":
                 print("Deployment failed:", doc.get("error"), file=sys.stderr)
                 sys.exit(1)
         except Exception as e:
-            print("  poll:", e)
+            print("  poll error:", e)
         time.sleep(5)
 
-    print("Zaman aşımı (10 dk). Webhook gelmedi; INTERNAL_WEBHOOK_BASE_URL Cloud Run'da set mi?", file=sys.stderr)
-    print("Yine de endpoint oluşmuş olabilir: GET", f"{API_BASE}/v1/deployments/{deployment_id}", file=sys.stderr)
+    print("Timeout (10 min). Webhook not received. Is INTERNAL_WEBHOOK_BASE_URL set on Cloud Run?", file=sys.stderr)
+    print("The endpoint might still be active: GET", f"{API_BASE}/v1/deployments/{deployment_id}", file=sys.stderr)
     sys.exit(1)
 
 

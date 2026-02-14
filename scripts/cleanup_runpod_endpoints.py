@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-Runpod hesabındaki tüm endpoint'leri siler. Kota boşaltmak için.
+Deletes all endpoints in the Runpod account to free up quota.
 
-Kullanım: python3 scripts/cleanup_runpod_endpoints.py
-.env.local'dan RUNPOD okunur.
+Usage: python3 scripts/cleanup_runpod_endpoints.py
+Reads RUNPOD from .env.local.
 """
 import json
 import os
@@ -66,16 +66,16 @@ def main():
     env = load_env()
     api_key = env.get("RUNPOD", "").strip()
     if not api_key:
-        print("HATA: .env.local içinde RUNPOD=... tanımlayın.", file=sys.stderr)
+        print("ERROR: Set RUNPOD=... in .env.local.", file=sys.stderr)
         sys.exit(1)
 
     data = graphql(api_key, QUERY_ENDPOINTS)
     endpoints = (data.get("myself") or {}).get("endpoints") or []
     if not endpoints:
-        print("Endpoint yok, silinecek bir şey yok.")
+        print("No endpoints found, nothing to delete.")
         return
 
-    print(f"{len(endpoints)} endpoint bulundu, siliniyor...")
+    print(f"Found {len(endpoints)} endpoints, deleting...")
     for ep in endpoints:
         eid = ep.get("id")
         name = ep.get("name", "")
@@ -83,10 +83,10 @@ def main():
             continue
         try:
             graphql(api_key, MUTATION_DELETE, {"id": eid})
-            print(f"  Silindi: {name or eid}")
+            print(f"  Deleted: {name or eid}")
         except Exception as e:
-            print(f"  HATA ({name or eid}): {e}", file=sys.stderr)
-    print("Tamam.")
+            print(f"  ERROR ({name or eid}): {e}", file=sys.stderr)
+    print("Done.")
 
 
 if __name__ == "__main__":

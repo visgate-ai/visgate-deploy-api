@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-Yerel webhook alıcı: deployment "ready" callback'lerini dinler.
-Kullanım: python3 scripts/webhook_receiver.py
-Ardından ngrok http 9999 ile dış URL alıp POST /v1/deployments'ta user_webhook_url olarak verin.
+Local webhook receiver: listens for deployment "ready" callbacks.
+Usage: python3 scripts/webhook_receiver.py
+Then use 'ngrok http 9999' to get a public URL and use it as 'user_webhook_url' in POST /v1/deployments.
 """
 import json
 from http.server import HTTPServer, BaseHTTPRequestHandler
@@ -17,9 +17,9 @@ class Handler(BaseHTTPRequestHandler):
             data = json.loads(body.decode())
             print("\n[WEBHOOK]", json.dumps(data, indent=2))
             if data.get("status") == "ready":
-                print("  -> Deployment hazır. endpoint_url:", data.get("endpoint_url"))
+                print("  -> Deployment ready. endpoint_url:", data.get("endpoint_url"))
         except Exception as e:
-            print("[WEBHOOK] Raw:", body[:500], e)
+            print("[WEBHOOK] Raw content:", body[:500], e)
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.end_headers()
@@ -30,8 +30,8 @@ class Handler(BaseHTTPRequestHandler):
 
 def main():
     server = HTTPServer(("0.0.0.0", PORT), Handler)
-    print(f"Webhook dinleniyor: http://0.0.0.0:{PORT}")
-    print("Dış URL için: ngrok http", PORT)
+    print(f"Listening for webhooks on: http://0.0.0.0:{PORT}")
+    print("To expose publicly: ngrok http", PORT)
     server.serve_forever()
 
 if __name__ == "__main__":
