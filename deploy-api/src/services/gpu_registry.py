@@ -1,61 +1,82 @@
-"""Map user GPU tier (e.g. A40) to Runpod gpuIds and VRAM."""
+"""Smart GPU selection for Runpod serverless based on VRAM, Tier preference, and Cost-efficiency."""
 
-# Runpod gpuIds from docs: AMPERE_16, AMPERE_24, ADA_24, AMPERE_48, ADA_48_PRO, AMPERE_80, ADA_80_PRO
-# Map user-facing tier -> Runpod gpuIds (comma-separated for alternatives)
-GPU_TIER_TO_RUNPOD: dict[str, list[str]] = {
-    "A40": ["AMPERE_48"],       # 48GB
-    "A100": ["AMPERE_80"],      # 80GB
-    "A100-40": ["AMPERE_48"],
+from typing import Optional, TypedDict
+
+class GPUSpec(TypedDict):
+    id: str
+    display: str
+    vram: int
+    cost_index: int  # Qualitative index: 1 (cheapest) to 10 (most expensive)
+
+# Current Runpod Serverless Inventory Registry
+# Ordered by general availability and cost-efficiency
+GPU_REGISTRY: list[GPUSpec] = [
+    {"id": "AMPERE_16", "display": "NVIDIA A16", "vram": 16, "cost_index": 1},
+    {"id": "AMPERE_24", "display": "NVIDIA A10 / A30", "vram": 24, "cost_index": 2},
+    {"id": "ADA_24", "display": "NVIDIA L40 / RTX 4090", "vram": 24, "cost_index": 3},
+    {"id": "AMPERE_48", "display": "NVIDIA A40", "vram": 48, "cost_index": 5},
+    {"id": "ADA_48_PRO", "display": "NVIDIA L40S", "vram": 48, "cost_index": 6},
+    {"id": "AMPERE_80", "display": "NVIDIA A100", "vram": 80, "cost_index": 8},
+    {"id": "ADA_80_PRO", "display": "NVIDIA H100", "vram": 80, "cost_index": 10},
+]
+
+# Tier Mapping for User Convenience
+TIER_MAPPING: dict[str, list[str]] = {
+    "ECONOMY": ["AMPERE_16", "AMPERE_24"],
+    "STANDARD": ["ADA_24", "AMPERE_24"],
+    "PRO": ["AMPERE_48", "ADA_48_PRO"],
+    "ULTIMATE": ["AMPERE_80", "ADA_80_PRO"],
+    # Hardware specific aliases
+    "A16": ["AMPERE_16"],
     "A10": ["AMPERE_24"],
-    "L40": ["ADA_24"],
-    "L4": ["ADA_24"],
-    "RTX4090": ["ADA_24"],
-    "default": ["AMPERE_24", "ADA_24", "AMPERE_16"],
+    "A40": ["AMPERE_48"],
+    "A100": ["AMPERE_80"],
+    "H100": ["ADA_80_PRO"],
+    "4090": ["ADA_24"],
 }
 
-# Runpod gpuId -> approximate VRAM GB for selection
-RUNPOD_GPU_VRAM_GB: dict[str, int] = {
-    "AMPERE_16": 16,
-    "AMPERE_24": 24,
-    "ADA_24": 24,
-    "AMPERE_48": 48,
-    "ADA_48_PRO": 48,
-    "AMPERE_80": 80,
-    "ADA_80_PRO": 80,
-}
-
-
-def get_runpod_gpu_ids(gpu_tier: str | None) -> list[str]:
-    """Return list of Runpod gpuIds for the given tier; default if tier unknown."""
+def select_gpu_id_for_vram(vram_gb: int, gpu_tier: Optional[str] = None) -> Optional[str]:
+    """
+    Select the optimal GPU based on VRAM requirements, tier preference, and cost efficiency.
+    
+    Logic:
+    1. If a specific tier is requested, try to pick the cheapest/narrowest fit within that tier.
+    2. If no tier (or tier not found), find the absolute cheapest GPU that satisfies VRAM requirements.
+    3. We optimize for 'Narrow Fit' to avoid over-provisioning (e.g., don't use 80GB for a 4GB model).
+    """
+    # 1. Resolve Tier Candidates
+    tier_candidates: list[str] = []
     if gpu_tier:
         normalized = gpu_tier.strip().upper()
-        if normalized in GPU_TIER_TO_RUNPOD:
-            return GPU_TIER_TO_RUNPOD[normalized]
-    return GPU_TIER_TO_RUNPOD["default"]
+        tier_candidates = TIER_MAPPING.get(normalized, [])
 
+    # 2. Filter Registry by VRAM
+    # Sort by cost_index (cheapest first) then by vram (narrowest fit first)
+    sorted_registry = sorted(GPU_REGISTRY, key=lambda x: (x["cost_index"], x["vram"]))
 
-def select_gpu_id_for_vram(vram_gb: int, gpu_tier: str | None) -> str | None:
-    """Pick a single Runpod gpuId that has at least vram_gb; prefer tier if specified."""
-    candidates = get_runpod_gpu_ids(gpu_tier)
-    for gpu_id in candidates:
-        if RUNPOD_GPU_VRAM_GB.get(gpu_id, 0) >= vram_gb:
-            return gpu_id
-    # Fallback: any GPU with enough VRAM
-    for gpu_id, gb in sorted(RUNPOD_GPU_VRAM_GB.items(), key=lambda x: x[1]):
-        if gb >= vram_gb:
-            return gpu_id
+    # Priority 1: Match within user-specified tier
+    if tier_candidates:
+        for gpu in sorted_registry:
+            if gpu["id"] in tier_candidates and gpu["vram"] >= vram_gb:
+                return gpu["id"]
+
+    # Priority 2: Absolute cheapest match (regardless of tier)
+    for gpu in sorted_registry:
+        if gpu["vram"] >= vram_gb:
+            return gpu["id"]
+
     return None
 
-
 def gpu_id_to_display_name(gpu_id: str) -> str:
-    """Return human-readable GPU name for response."""
-    names = {
-        "AMPERE_16": "NVIDIA A16",
-        "AMPERE_24": "NVIDIA A10",
-        "ADA_24": "NVIDIA L40 / RTX 4090",
-        "AMPERE_48": "NVIDIA A40",
-        "ADA_48_PRO": "NVIDIA L40S",
-        "AMPERE_80": "NVIDIA A100",
-        "ADA_80_PRO": "NVIDIA H100",
-    }
-    return names.get(gpu_id, f"NVIDIA {gpu_id}")
+    """Resolve display name from registry."""
+    for gpu in GPU_REGISTRY:
+        if gpu["id"] == gpu_id:
+            return gpu["display"]
+    return f"NVIDIA {gpu_id}"
+
+def get_gpu_vram(gpu_id: str) -> int:
+    """Get VRAM for a specific GPU ID."""
+    for gpu in GPU_REGISTRY:
+        if gpu["id"] == gpu_id:
+            return gpu["vram"]
+    return 0

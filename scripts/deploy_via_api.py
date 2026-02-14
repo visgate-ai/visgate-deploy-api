@@ -66,6 +66,7 @@ def api_post(path, body):
         headers={
             "Content-Type": "application/json",
             "Authorization": f"Bearer {API_BEARER}",
+            "User-Agent": "Visgate-Deploy-API/1.0",
         },
         method="POST",
     )
@@ -78,7 +79,7 @@ def api_get(path):
     url = f"{API_BASE.rstrip('/')}{path}"
     req = urllib.request.Request(
         url,
-        headers={"Authorization": f"Bearer {API_BEARER}"},
+        headers={"Authorization": f"Bearer {API_BEARER}", "User-Agent": "Visgate-Deploy-API/1.0"},
         method="GET",
     )
     with urllib.request.urlopen(req, timeout=15) as r:
@@ -114,6 +115,9 @@ def main():
         "user_runpod_key": runpod_key,
         "user_webhook_url": webhook_url,
     }
+    gpu_tier = os.environ.get("GPU_TIER")
+    if gpu_tier:
+        body["gpu_tier"] = gpu_tier
     if hf_token:
         body["hf_token"] = hf_token
 

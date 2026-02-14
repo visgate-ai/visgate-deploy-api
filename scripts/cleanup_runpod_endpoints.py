@@ -48,7 +48,7 @@ def graphql(api_key: str, query: str, variables: dict | None = None) -> dict:
     req = urllib.request.Request(
         url,
         data=json.dumps(payload).encode(),
-        headers={"Content-Type": "application/json"},
+        headers={"Content-Type": "application/json", "User-Agent": "Visgate-Deploy-API/1.0"},
         method="POST",
     )
     try:
