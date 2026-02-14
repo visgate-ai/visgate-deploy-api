@@ -20,7 +20,7 @@ from src.models.schemas import (
 from src.services.deployment import orchestrate_deployment
 from src.services.firestore_repo import get_deployment, set_deployment
 from src.services.model_resolver import get_hf_name
-from src.services.runpod import delete_endpoint
+from src.services.provider_factory import get_provider
 from src.services.tasks import enqueue_orchestration_task
 
 router = APIRouter(prefix="/v1/deployments", tags=["deployments"])
@@ -156,7 +156,9 @@ async def delete_deployment(
         raise DeploymentNotFoundError(deployment_id)
     if doc.runpod_endpoint_id and doc.user_runpod_key_ref:
         try:
-            await delete_endpoint(doc.user_runpod_key_ref, doc.runpod_endpoint_id, url=settings.runpod_graphql_url)
+            # For now default to runpod, but doc could store the provider name
+            provider = get_provider("runpod")
+            await provider.delete_endpoint(doc.runpod_endpoint_id, doc.user_runpod_key_ref)
         except Exception:
             pass
     ref = firestore_client.collection(settings.firestore_collection_deployments).document(deployment_id)
