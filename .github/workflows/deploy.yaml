@@ -1,0 +1,65 @@
+name: Deploy to Cloud Run
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+env:
+  PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }} # visgate
+  REGION: us-central1 # Cheaper/Standard region
+  SERVICE_NAME: deployment-orchestrator
+  IMAGE: gcr.io/${{ secrets.GCP_PROJECT_ID }}/deployment-orchestrator:${{ github.sha }}
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: 'read'
+      id-token: 'write'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Google Auth
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: '${{ secrets.GCP_CREDENTIALS }}' # Service Account Key JSON
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Use gcloud CLI
+        run: gcloud info
+
+      - name: Configure Docker
+        run: gcloud auth configure-docker --quiet
+
+      - name: Build and Push Container
+        run: |
+          docker build -t $IMAGE -f deployment-orchestrator/Dockerfile deployment-orchestrator
+          docker push $IMAGE
+
+      - name: Deploy to Cloud Run
+        uses: google-github-actions/deploy-cloudrun@v2
+        with:
+          service: ${{ env.SERVICE_NAME }}
+          image: ${{ env.IMAGE }}
+          region: ${{ env.REGION }}
+          env_vars: |
+            GCP_PROJECT_ID=${{ env.PROJECT_ID }}
+            FIRESTORE_COLLECTION_DEPLOYMENTS=serverless_visgate_deployments
+            FIRESTORE_COLLECTION_LOGS=serverless_visgate_logs
+            FIRESTORE_COLLECTION_API_KEYS=serverless_visgate_api_keys
+            GCP_LOCATION=${{ env.REGION }}
+            CLOUD_TASKS_QUEUE_PATH=projects/${{ env.PROJECT_ID }}/locations/${{ env.REGION }}/queues/visgate-orchestrator-queue
+            LOG_LEVEL=INFO
+          secrets: |
+            RUNPOD_TEMPLATE_ID=RUNPOD_TEMPLATE_ID:latest
+            INTERNAL_WEBHOOK_SECRET=INTERNAL_WEBHOOK_SECRET:latest
+          flags: '--allow-unauthenticated'
+
+      - name: Show Output
+        run: echo ${{ steps.deploy.outputs.url }}

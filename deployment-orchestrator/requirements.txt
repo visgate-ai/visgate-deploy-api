@@ -1,0 +1,24 @@
+# FastAPI & server
+fastapi>=0.109.0
+uvicorn[standard]>=0.27.0
+
+# Config & validation
+pydantic>=2.5.0
+pydantic-settings>=2.1.0
+
+# GCP
+google-cloud-firestore>=2.14.0
+google-cloud-secret-manager>=2.16.0
+google-cloud-tasks>=2.13.0
+
+# HTTP client
+httpx>=0.26.0
+
+# Hugging Face (optional, for model validation)
+huggingface_hub>=0.20.0
+
+# Observability (optional)
+opentelemetry-api>=1.22.0
+opentelemetry-sdk>=1.22.0
+opentelemetry-instrumentation-fastapi>=0.43b0
+opentelemetry-exporter-gcp-trace>=1.6.0

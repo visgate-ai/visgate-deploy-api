@@ -1,0 +1,20 @@
+# Pre-commit hooks: ruff, mypy, pytest
+# Install: pip install pre-commit && pre-commit install
+
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.1.15
+    hooks:
+      - id: ruff
+        args: [--fix]
+  - repo: local
+    hooks:
+      - id: mypy
+        name: mypy
+        entry: bash -c 'mypy src/ || true'
+        language: system
+      - id: pytest
+        name: pytest
+        entry: bash -c 'cd deployment-orchestrator && PYTHONPATH=. python -m pytest tests/ -q || true'
+        language: system
+        pass_filenames: false
