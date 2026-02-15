@@ -1,5 +1,18 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+- End-to-end reliability docs and hosted quick-start in root `README.md`.
+- Build context optimization files for `deploy-api` (`.gcloudignore`, `.dockerignore`).
+- Timed E2E and cleanup helper scripts for operational validation.
+
+### Changed
+- Deployment flow now keeps `ready` state even if user webhook delivery fails.
+- CI/CD and deploy scripts now force traffic to latest Cloud Run revision after deploy.
+- Runpod endpoint creation payload uses correct env schema (`[{key, value}]`).
+- E2E scripts normalize Runpod endpoint URL handling for `/runsync` and `/status`.
+
 ## [Initial Release] - 2026-02-15
 
 ### Added

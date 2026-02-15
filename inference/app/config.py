@@ -10,7 +10,8 @@ def get_env(key: str, default: Optional[str] = None) -> Optional[str]:
 
 
 # Required: set by Runpod / orchestrator
-HF_MODEL_ID: str = get_env("HF_MODEL_ID") or ""
+# Fallback to sd-turbo if template doesn't pass HF_MODEL_ID properly
+HF_MODEL_ID: str = get_env("HF_MODEL_ID") or "stabilityai/sd-turbo"
 HF_TOKEN: Optional[str] = get_env("HF_TOKEN")
 
 # When ready, POST to this URL (orchestrator internal webhook)

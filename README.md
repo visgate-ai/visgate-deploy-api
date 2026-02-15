@@ -1,96 +1,137 @@
 # Visgate Deploy API
 
-**Visgate Deploy API** is an open-source tool that allows you to run Hugging Face diffusion models (Flux, SDXL, etc.) on **Runpod Serverless** infrastructure with ease.
+Deploy Hugging Face diffusion models to Runpod Serverless through a single API.
 
-With our **Hosted Orchestrator API**, you can deploy models without setting up your own server or cloud infrastructure. All you need is your Runpod API Key.
+`visgate-deploy-api` is an open-source orchestration service that:
+- accepts model deployment requests,
+- creates and tracks Runpod endpoints,
+- updates lifecycle state in Firestore,
+- notifies your webhook when the endpoint is ready.
 
----
+The orchestrator is designed for asynchronous model startup, so your app can stay responsive while pods warm up.
 
-## 🚀 How It Works
+## What You Get
 
-1.  **Request:** Send the desired model ID and your Runpod key to our API endpoint (`POST /v1/deployments`).
-2.  **Orchestration:** Our system configures the Runpod template and endpoint in your account and prepares the model.
-3.  **Webhook:** Once the model is loaded and ready, we send a webhook to your specified URL.
-4.  **Inference:** Use the provided endpoint URL from the webhook to generate images.
+- Asynchronous deployment API with status polling and SSE stream support
+- Worker phase tracking (`validating`, `creating_endpoint`, `loading_model`, `ready`, `failed`)
+- Runpod endpoint lifecycle management (create/delete)
+- Firestore-backed deployment state and logs
+- Webhook callback when deployment is ready
+- Production deployment path for GCP Cloud Run + GitHub Actions CI/CD
 
----
+## Repository Layout
 
-## 🔌 API Usage (Hosted Service)
+- `deploy-api/` - FastAPI orchestrator (Cloud Run service)
+- `inference/` - Runpod worker image that loads and serves the model
+- `scripts/` - E2E tests and Runpod maintenance helpers
 
-**Base URL:** `https://api.visgate.io` (Example URL - Update after deployment)
+## Hosted Endpoint
 
-### 1. Create Deployment
+Current hosted endpoint:
 
-**POST** `/v1/deployments`
-**Header:** `Authorization: Bearer <VISGATE_API_KEY>`
+- `https://visgate-deploy-api-wxup7pxrsa-uc.a.run.app`
 
-```json
-{
-  "hf_model_id": "black-forest-labs/FLUX.1-schnell",
-  "user_runpod_key": "YOUR_RUNPOD_API_KEY",
-  "user_webhook_url": "https://your-server.com/webhook",
-  "gpu_tier": "3090" // Optional (3090, A40, A100, etc.)
-}
-```
+Use your own API key in `Authorization: Bearer <VISGATE_API_KEY>`.
 
-### 2. Webhook Response (Ready)
+## Quick Start (Hosted)
 
-When the model is ready, your `user_webhook_url` will receive this JSON:
-
-```json
-{
-  "event": "deployment_ready",
-  "deployment_id": "dep_2024_abc123",
-  "status": "ready",
-  "endpoint_url": "https://api.runpod.ai/v2/xxxx-xxxx/run",
-  "model_id": "black-forest-labs/FLUX.1-schnell",
-  "gpu_allocated": "RTX 3090",
-  "duration_seconds": 120.5,
-  "usage_example": {
-    "method": "POST",
-    "url": "https://api.runpod.ai/v2/xxxx-xxxx/run",
-    "headers": {
-      "Authorization": "Bearer YOUR_RUNPOD_API_KEY"
-    },
-    "body": {
-      "input": {
-        "prompt": "An astronaut riding a horse in photorealistic style",
-        "num_inference_steps": 28,
-        "guidance_scale": 3.5
-      }
-    }
-  }
-}
-```
-
-### 3. Generate Image (Inference)
-
-Send a request to the URL received in the webhook:
+1) Create deployment
 
 ```bash
-curl -X POST https://api.runpod.ai/v2/xxxx-xxxx/run \
-     -H "Authorization: Bearer YOUR_RUNPOD_API_KEY" \
-     -H "Content-Type: application/json" \
-     -d '{
-           "input": {
-               "prompt": "Cyberpunk city with neon lights",
-               "num_inference_steps": 25
-           }
-         }'
+curl -X POST "https://visgate-deploy-api-wxup7pxrsa-uc.a.run.app/v1/deployments" \
+  -H "Authorization: Bearer <VISGATE_API_KEY>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "hf_model_id": "stabilityai/sd-turbo",
+    "gpu_tier": "A10",
+    "user_runpod_key": "rpa_xxx",
+    "hf_token": "hf_xxx_optional_for_gated_models",
+    "user_webhook_url": "https://your-app.com/webhooks/visgate"
+  }'
 ```
 
----
+2) Poll deployment status
 
-## 🛠️ Self-Hosting
+```bash
+curl -H "Authorization: Bearer <VISGATE_API_KEY>" \
+  "https://visgate-deploy-api-wxup7pxrsa-uc.a.run.app/v1/deployments/<deployment_id>"
+```
 
-If you wish to host this service yourself on your own GCP project:
+3) Call Runpod inference once ready
 
-1.  **deployment-orchestrator:** Deploy to GCP Cloud Run. Requires Firestore, Cloud Tasks, and Secret Manager.
-2.  **inference:** Build the Docker image and push to Docker Hub.
-3.  See [deployment-orchestrator/README.md](deployment-orchestrator/README.md) for detailed setup instructions.
+```bash
+curl -X POST "https://api.runpod.ai/v2/<endpoint_id>/runsync" \
+  -H "Authorization: Bearer <YOUR_RUNPOD_API_KEY>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "input": {
+      "prompt": "A cinematic view of Istanbul at golden hour",
+      "num_inference_steps": 2
+    }
+  }'
+```
 
----
+## API Summary
 
-## 📜 License
+- `POST /v1/deployments` - create deployment (returns `202`)
+- `GET /v1/deployments/{deployment_id}` - get status, logs, endpoint URL
+- `GET /v1/deployments/{deployment_id}/stream` - SSE live status stream
+- `DELETE /v1/deployments/{deployment_id}` - delete Runpod endpoint and mark deleted
+- `GET /health` - liveness
+- `GET /metrics` - deployment and failure counters
 
-MIT License.
+## Self-Host on GCP
+
+1) Prepare env and secrets
+- create `deploy-api/.env` from `deploy-api/.env.example`
+- set Secret Manager values (`RUNPOD_TEMPLATE_ID`, `INTERNAL_WEBHOOK_SECRET`)
+
+2) Build and deploy orchestrator
+
+```bash
+cd deploy-api
+./deploy_with_keys.sh us-central1
+```
+
+3) Build/push worker image for Runpod
+
+```bash
+cd inference
+./build-and-push.sh
+```
+
+For deeper setup details, see:
+- `deploy-api/README.md`
+- `inference/README.md`
+
+## End-to-End Validation
+
+Use timed E2E flow:
+
+```bash
+API_BASE="https://visgate-deploy-api-wxup7pxrsa-uc.a.run.app" \
+RUNPOD="<runpod_key>" HF="<hf_token_optional>" \
+python3 scripts/e2e_timed_istanbul.py
+```
+
+Recent real runs:
+
+| Deployment | T1 Deploy -> Ready | T2 Inference | Total |
+|---|---:|---:|---:|
+| `dep_2026_416968b0` | 72.12s | 8.89s | 81.01s |
+| `dep_2026_24644278` | 37.61s | 7.55s | 45.16s |
+
+## Cleanup Helpers
+
+- `python3 scripts/cleanup_runpod.py` - deletes `visgate-*` endpoints from your Runpod account
+
+## Contributing
+
+Contributions are welcome. Open an issue for bugs/features, then submit a PR with:
+- clear description of behavior change,
+- test evidence (local or Cloud Run),
+- updated docs when API behavior changes.
+
+## License
+
+MIT. See `LICENSE`.

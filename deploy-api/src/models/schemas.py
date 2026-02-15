@@ -1,7 +1,7 @@
 """Pydantic request/response models for API and internal webhooks."""
 
 from datetime import datetime
-from typing import Any, Literal, Optional
+from typing import Literal, Optional
 
 from pydantic import BaseModel, Field, HttpUrl
 
@@ -28,10 +28,14 @@ class DeploymentResponse202(BaseModel):
     """202 Accepted response for POST /v1/deployments."""
 
     deployment_id: str
-    status: Literal["validating"] = "validating"
+    status: Literal["validating", "creating_endpoint", "ready"] = "validating"
     model_id: str
-    estimated_ready_seconds: int = Field(default=180, ge=60, le=600)
+    estimated_ready_seconds: int = Field(default=180, ge=0, le=600)
+    estimated_ready_at: datetime
+    poll_interval_seconds: int = Field(default=5, ge=1, le=30)
+    stream_url: str
     webhook_url: str
+    endpoint_url: Optional[str] = None
     created_at: datetime
 
 
@@ -67,6 +71,8 @@ class DeploymentResponse(BaseModel):
     model_vram_gb: Optional[int] = None
     logs: list[LogEntrySchema] = Field(default_factory=list)
     error: Optional[str] = None
+    estimated_remaining_seconds: Optional[int] = None
+    phase_durations: dict[str, float] = Field(default_factory=dict)
     created_at: datetime
     ready_at: Optional[datetime] = None
 
@@ -75,6 +81,6 @@ class DeploymentResponse(BaseModel):
 class DeploymentReadyPayload(BaseModel):
     """POST /internal/deployment-ready/{deployment_id} optional body."""
 
-    status: Literal["ready"] = "ready"
+    status: Literal["downloading_model", "loading_model", "ready", "failed"] = "ready"
     message: Optional[str] = None
     endpoint_url: Optional[str] = None

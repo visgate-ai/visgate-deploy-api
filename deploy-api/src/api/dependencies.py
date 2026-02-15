@@ -44,6 +44,11 @@ async def get_current_api_key(
     Validate Bearer token against Firestore api_keys collection.
     Key must exist and be active.
     """
+    import os
+    # DEV MODE: Skip auth for local testing
+    if os.getenv("DEV_MODE") == "true":
+        return "dev-api-key"
+    
     token: Optional[str] = None
     if credentials and credentials.credentials:
         token = credentials.credentials

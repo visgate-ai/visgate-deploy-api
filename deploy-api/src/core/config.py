@@ -57,13 +57,17 @@ class Settings(BaseSettings):
 
     # Runpod
     docker_image: str = Field(
-        default="visgateai/inference:latest",
+        default="uzunenes/inference:latest",
         min_length=1,
         description="Docker image for Runpod inference workers",
     )
     runpod_template_id: str = Field(
         default="",
         description="Runpod template ID for the inference image (create in Runpod console)",
+    )
+    runpod_volume_size_gb: int = Field(
+        default=0,
+        description="Optional persistent volume size in GB (0 to disable)",
     )
     runpod_max_retries: int = Field(default=3, ge=1, le=10)
     runpod_graphql_url: str = Field(
@@ -88,8 +92,18 @@ class Settings(BaseSettings):
         description="Base URL of this service for container callback (e.g. https://orch-xxx.run.app)",
     )
 
+    # AWS / S3 (Optional, for optimized loading)
+    aws_access_key_id: str = Field(default="", description="AWS Access Key ID")
+    aws_secret_access_key: str = Field(default="", description="AWS Secret Access Key")
+    aws_endpoint_url: str = Field(default="", description="AWS Endpoint URL (for R2/Minio)")
+    s3_model_url: str = Field(default="", description="Base S3 URL for model cache")
+
     # API
     rate_limit_requests_per_minute: int = Field(default=100, ge=1, le=1000)
+    enable_endpoint_reuse: bool = Field(
+        default=False,
+        description="Reuse ready endpoints for same model/key instead of creating new endpoint",
+    )
 
     @field_validator("log_level", mode="before")
     @classmethod

@@ -74,7 +74,7 @@ Tears down the Runpod endpoint and marks deployment deleted. Returns 204.
 - **GET /health** – Liveness (<10ms).
 - **GET /readiness** – Checks Firestore connection.
 
-- **[USAGE.md](USAGE.md)** – Lokal çalıştırma, endpoint testleri (curl örnekleri) ve gerçek yanıt örnekleri.
+- **[USAGE.md](USAGE.md)** - Local run steps, endpoint tests (curl examples), and real response samples.
 
 ## Inference image (Runpod worker)
 
@@ -82,8 +82,8 @@ Tears down the Runpod endpoint and marks deployment deleted. Returns 204.
 
 1. **Create Runpod template** (once; uses our image so Runpod can start it):
    ```bash
-   # From repo root: ensure ../.env.local has RUNPOD= and IMAGE= (or DOCKER_IMAGE=)
-   cd deployment-orchestrator && .venv/bin/python scripts/create_runpod_template.py
+   # From repo root: ensure .env.local has RUNPOD= and IMAGE= (or DOCKER_IMAGE=)
+   cd deploy-api && .venv/bin/python scripts/create_runpod_template.py
    # Add printed RUNPOD_TEMPLATE_ID=... to .env
    ```
 
@@ -110,7 +110,7 @@ See [inference/README.md](../inference/README.md) for supported models, job I/O,
 
 3. **Run**
    ```bash
-   cd deployment-orchestrator
+   cd deploy-api
    pip install -r requirements.txt
    export PYTHONPATH=.
    uvicorn src.main:app --reload --port 8080

@@ -40,3 +40,6 @@ logs/
 *.json
 !package.json
 !tsconfig.json
+
+# Generated artifacts
+istanbul_final.png

@@ -4,6 +4,7 @@ from datetime import UTC, datetime
 from typing import Optional
 
 from google.cloud import firestore  # type: ignore
+from google.cloud.firestore_v1.base_query import FieldFilter
 
 from src.models.entities import DeploymentDoc, LogEntry
 
@@ -105,3 +106,34 @@ def get_tier_mapping(
         ids = data.get("gpu_ids", [])
         mapping[name] = ids
     return mapping
+
+
+def find_reusable_deployment(
+    client: firestore.Client,
+    collection: str,
+    api_key_id: str,
+    hf_model_id: str,
+    gpu_tier: Optional[str],
+    user_runpod_key: str,
+) -> Optional[DeploymentDoc]:
+    """
+    Find an active deployment for the same caller/model/key so we can reuse endpoint.
+    """
+    active_statuses = {"ready", "creating_endpoint", "downloading_model", "loading_model"}
+    query = client.collection(collection).where(
+        filter=FieldFilter("api_key_id", "==", api_key_id)
+    ).limit(50)
+    for snap in query.stream():
+        data = snap.to_dict() or {}
+        if data.get("hf_model_id") != hf_model_id:
+            continue
+        if data.get("gpu_tier") != gpu_tier:
+            continue
+        if data.get("user_runpod_key_ref") != user_runpod_key:
+            continue
+        if data.get("status") not in active_statuses:
+            continue
+        if not data.get("endpoint_url") or not data.get("runpod_endpoint_id"):
+            continue
+        return DeploymentDoc.from_firestore_dict(data)
+    return None

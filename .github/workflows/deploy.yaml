@@ -43,6 +43,7 @@ jobs:
           docker push $IMAGE
 
       - name: Deploy to Cloud Run
+        id: deploy
         uses: google-github-actions/deploy-cloudrun@v2
         with:
           service: ${{ env.SERVICE_NAME }}
@@ -55,13 +56,20 @@ jobs:
             FIRESTORE_COLLECTION_API_KEYS=visgate_deploy_api_api_keys
             GCP_LOCATION=${{ env.REGION }}
             CLOUD_TASKS_QUEUE_PATH=projects/${{ env.PROJECT_ID }}/locations/${{ env.REGION }}/queues/visgate-orchestrator-queue
-            INTERNAL_WEBHOOK_BASE_URL=https://${{ env.SERVICE_NAME }}-93820292919.us-central1.run.app
+            INTERNAL_WEBHOOK_BASE_URL=https://visgate-deploy-api-wxup7pxrsa-uc.a.run.app
             DOCKER_IMAGE=uzunenes/inference:latest
             LOG_LEVEL=INFO
           secrets: |
             RUNPOD_TEMPLATE_ID=RUNPOD_TEMPLATE_ID:latest
             INTERNAL_WEBHOOK_SECRET=INTERNAL_WEBHOOK_SECRET:latest
           flags: '--allow-unauthenticated'
+
+      - name: Route Traffic to Latest Revision
+        run: |
+          gcloud run services update-traffic "${{ env.SERVICE_NAME }}" \
+            --to-latest \
+            --region "${{ env.REGION }}" \
+            --project "${{ env.PROJECT_ID }}"
 
       - name: Show Output
         run: echo ${{ steps.deploy.outputs.url }}

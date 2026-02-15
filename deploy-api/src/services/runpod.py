@@ -1,6 +1,5 @@
 """Runpod Provider Implementation."""
 
-import asyncio
 from typing import Any, Optional
 
 import httpx
@@ -76,17 +75,21 @@ class RunpodProvider(BaseInferenceProvider):
             "name": name,
             "templateId": template_id,
             "gpuIds": gpu_id,
-            "idleTimeout": kwargs.get("idle_timeout", 5),
+            "idleTimeout": kwargs.get("idle_timeout", 300),
             "locations": kwargs.get("locations", "US"),
             "scalerType": kwargs.get("scaler_type", "QUEUE_DELAY"),
-            "scalerValue": kwargs.get("scaler_value", 4),
-            "workersMin": kwargs.get("workers_min", 0),
-            "workersMax": kwargs.get("workers_max", 3),
-            "env": runpod_env,
-            "containerDiskSizeGb": kwargs.get("container_disk_size_gb", 20)
+            "scalerValue": kwargs.get("scaler_value", 2),
+            "workersMin": kwargs.get("workers_min", 1),
+            "workersMax": kwargs.get("workers_max", 2),
+            "env": runpod_env
         }
+        
+        if kwargs.get("volume_in_gb"):
+            input_obj["volumeInGb"] = kwargs["volume_in_gb"]
+            input_obj["volumeMountPath"] = kwargs.get("volume_mount_path", "/runpod-volume")
 
         with span("runpod.create_endpoint", {"name": name}):
+            structured_log("INFO", f"Runpod create_endpoint payload: {input_obj}")
             data = await self._graphql_request(api_key, mutation, {"input": input_obj})
             result = data.get("saveEndpoint")
             if not result:

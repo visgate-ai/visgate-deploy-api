@@ -1,6 +1,6 @@
 # Visgate HF Inference Worker (Runpod)
 
-Docker image that loads any supported Hugging Face diffusion model and exposes a Runpod serverless endpoint. Used by the **deployment-orchestrator** in this repo: when a deployment is created, Runpod runs this image with `HF_MODEL_ID` and `VISGATE_WEBHOOK`; after the model loads, the worker notifies the orchestrator and handles inference jobs. You send requests to the returned `endpoint_url` and get back images (base64) or errors.
+Docker image that loads any supported Hugging Face diffusion model and exposes a Runpod serverless endpoint. Used by the **deploy-api** service in this repo: when a deployment is created, Runpod runs this image with `HF_MODEL_ID` and `VISGATE_WEBHOOK`; after the model loads, the worker notifies the orchestrator and handles inference jobs. You send requests to the returned `endpoint_url` and get back images (base64) or errors.
 
 ## Supported models (modular)
 

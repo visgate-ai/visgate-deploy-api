@@ -23,38 +23,51 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 cd "${REPO_ROOT}"
 gcloud builds submit --tag "${IMAGE}" deploy-api
 
-# Optional: RUNPOD_TEMPLATE_ID (from scripts/create_runpod_template.py), INTERNAL_WEBHOOK_BASE_URL (Cloud Run URL for container callback)
-EXTRA_ENV=""
-[[ -n "${RUNPOD_TEMPLATE_ID:-}" ]] && EXTRA_ENV="${EXTRA_ENV} --set-env-vars RUNPOD_TEMPLATE_ID=${RUNPOD_TEMPLATE_ID}"
-[[ -n "${INTERNAL_WEBHOOK_BASE_URL:-}" ]] && EXTRA_ENV="${EXTRA_ENV} --set-env-vars INTERNAL_WEBHOOK_BASE_URL=${INTERNAL_WEBHOOK_BASE_URL}"
+# Load only specific optional vars from files without overriding IMAGE/SERVICE_NAME.
+load_optional_var() {
+  local file="$1"
+  local key="$2"
+  if [[ -f "${file}" && -z "${!key:-}" ]]; then
+    local value
+    value="$(awk -F= -v k="${key}" '$1==k {sub(/^[^=]*=/,""); print; exit}' "${file}")"
+    if [[ -n "${value}" ]]; then
+      export "${key}=${value}"
+    fi
+  fi
+}
 
-# Deploy Cloud Run
-# Load .env.local from parent directory
-if [ -f ../.env.local ]; then
-  # remove spaces around equals just in case, though .env.local seems clean
-  export $(grep -v '^#' ../.env.local | xargs)
-fi
+for f in "${REPO_ROOT}/deploy-api/.env" "${REPO_ROOT}/.env.local"; do
+  load_optional_var "${f}" "RUNPOD_TEMPLATE_ID"
+  load_optional_var "${f}" "INTERNAL_WEBHOOK_BASE_URL"
+  load_optional_var "${f}" "INTERNAL_WEBHOOK_SECRET"
+done
 
 CLOUD_TASKS_QUEUE_PATH="projects/${PROJECT_ID}/locations/${REGION}/queues/visgate-orchestrator-queue"
+INTERNAL_WEBHOOK_BASE_URL_VALUE="${INTERNAL_WEBHOOK_BASE_URL:-https://visgate-deploy-api-wxup7pxrsa-uc.a.run.app}"
 
 gcloud run deploy "${SERVICE_NAME}" \
   --image "${IMAGE}" \
   --region "${REGION}" \
   --platform managed \
   --allow-unauthenticated \
-  --set-env-vars "GCP_PROJECT_ID=${PROJECT_ID}" \
-  --set-env-vars "FIRESTORE_COLLECTION_DEPLOYMENTS=visgate_deploy_api_deployments" \
-  --set-env-vars "FIRESTORE_COLLECTION_LOGS=visgate_deploy_api_logs" \
-  --set-env-vars "FIRESTORE_COLLECTION_API_KEYS=visgate_deploy_api_api_keys" \
-  --set-env-vars "CLOUD_TASKS_QUEUE_PATH=${CLOUD_TASKS_QUEUE_PATH}" \
-  --set-env-vars "GCP_LOCATION=${REGION}" \
-  --set-env-vars "LOG_LEVEL=INFO" \
-  ${EXTRA_ENV} \
+  --update-env-vars "GCP_PROJECT_ID=${PROJECT_ID}" \
+  --update-env-vars "FIRESTORE_COLLECTION_DEPLOYMENTS=visgate_deploy_api_deployments" \
+  --update-env-vars "FIRESTORE_COLLECTION_LOGS=visgate_deploy_api_logs" \
+  --update-env-vars "FIRESTORE_COLLECTION_API_KEYS=visgate_deploy_api_api_keys" \
+  --update-env-vars "CLOUD_TASKS_QUEUE_PATH=${CLOUD_TASKS_QUEUE_PATH}" \
+  --update-env-vars "GCP_LOCATION=${REGION}" \
+  --update-env-vars "LOG_LEVEL=INFO" \
+  --update-env-vars "DOCKER_IMAGE=uzunenes/inference:latest" \
+  --update-env-vars "INTERNAL_WEBHOOK_BASE_URL=${INTERNAL_WEBHOOK_BASE_URL_VALUE}" \
   --port 8080 \
+  --project "${PROJECT_ID}"
+
+# Ensure newly created revision receives traffic.
+gcloud run services update-traffic "${SERVICE_NAME}" \
+  --to-latest \
+  --region "${REGION}" \
   --project "${PROJECT_ID}"
 
 SERVICE_URL=$(gcloud run services describe "${SERVICE_NAME}" --region "${REGION}" --project "${PROJECT_ID}" --format='value(status.url)' 2>/dev/null || true)
 echo "Deployed. API: ${SERVICE_URL:-unknown}"
-if [[ -z "${INTERNAL_WEBHOOK_BASE_URL:-}" && -n "${SERVICE_URL}" ]]; then
-  echo "To let Runpod containers callback: Cloud Run Console → ${SERVICE_NAME} → Edit → Variables → INTERNAL_WEBHOOK_BASE_URL=${SERVICE_URL}"
-fi
+

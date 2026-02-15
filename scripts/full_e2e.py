@@ -4,11 +4,11 @@ import sys
 import time
 import requests
 import base64
-import subprocess
 
-API_BASE = "https://visgate-deploy-api-93820292919.us-central1.run.app"
+API_BASE = os.environ.get("API_BASE", "https://visgate-deploy-api-wxup7pxrsa-uc.a.run.app")
 BEARER = "visgate"
 MODEL = "stabilityai/sd-turbo"
+WEBHOOK_URL = os.environ.get("WEBHOOK_URL", "https://httpbin.org/post")
 
 def main():
     print(f"--- Starting Full E2E Flow ---")
@@ -20,7 +20,7 @@ def main():
         "gpu_tier": "A10", # AMPERE_24
         "user_runpod_key": os.environ.get("RUNPOD"),
         "hf_token": os.environ.get("HF"),
-        "user_webhook_url": "https://webhook.site/4fc3656c-0e24-42f1-9b62-97b5e40632b8" # dummy
+        "user_webhook_url": WEBHOOK_URL
     }
     
     if not payload["user_runpod_key"]:
@@ -71,7 +71,8 @@ def main():
 
     # 3. Trigger Inference (using e2e_istanbul logic)
     print("Sending Istanbul prompt...")
-    run_url = f"{endpoint_url}/runsync"
+    endpoint_root = endpoint_url[:-4] if endpoint_url.endswith("/run") else endpoint_url
+    run_url = f"{endpoint_root}/runsync"
     inference_payload = {
         "input": {
             "prompt": "A beautiful panoramic view of Istanbul with the Bosphorus strait, Hagia Sophia and minarets, golden hour, photorealistic, 4k",
@@ -97,13 +98,16 @@ def main():
         elif job_status in ["IN_QUEUE", "IN_PROGRESS"]:
             print(f"  Inference {job_status}... polling job {job_id}")
             time.sleep(5)
-            # Switch to GET status polling
-            run_url = f"{endpoint_url.replace('/run', '/status')}/{job_id}"
-            # This is a bit hacky transition but runpod usually needs GET after first POST
-            # Actually runpod status URL is v2/{id}/status/{job_id}
+            # Correct Runpod status URL: v2/{id}/status/{job_id}
+            run_url = f"{endpoint_root}/status/{job_id}"
             continue
         elif job_status == "FAILED":
-            print(f"Inference FAILED: {inf_data.get('error')}")
+            error_msg = str(inf_data.get('error', ''))
+            if "still loading" in error_msg.lower():
+                print("  Model still loading, waiting 10s...")
+                time.sleep(10)
+                continue
+            print(f"Inference FAILED: {error_msg}")
             sys.exit(1)
         else:
             # If COMPLETED on first try
