@@ -98,6 +98,7 @@ def handler(job: dict[str, Any]) -> dict[str, Any]:
 
 
 def main() -> None:
+    print("[worker] Starting Inference Worker v1.2", flush=True)
     _load_model()
     import runpod
     runpod.serverless.start({"handler": handler})
