@@ -113,6 +113,7 @@ async def orchestrate_deployment(deployment_id: str) -> None:
             api_key=user_runpod_key,
             # Runpod specific kwargs
             template_id=settings.runpod_template_id,
+            workers_min=1,
             workers_max=1
         )
         
