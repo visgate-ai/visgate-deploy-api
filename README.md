@@ -25,6 +25,11 @@ The orchestrator is designed for asynchronous model startup, so your app can sta
 - `inference/` - Runpod worker image that loads and serves the model
 - `scripts/` - E2E tests and Runpod maintenance helpers
 
+## Implementation Roadmap (for Agents)
+
+- Canonical architecture migration plan for future AI agents:
+  - `.cursor/plans/visgate-predictive-stateless-roadmap.md`
+
 ## Hosted Endpoint
 
 Current hosted endpoint:
