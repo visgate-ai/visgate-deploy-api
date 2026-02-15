@@ -56,6 +56,7 @@ jobs:
             GCP_LOCATION=${{ env.REGION }}
             CLOUD_TASKS_QUEUE_PATH=projects/${{ env.PROJECT_ID }}/locations/${{ env.REGION }}/queues/visgate-orchestrator-queue
             INTERNAL_WEBHOOK_BASE_URL=https://${{ env.SERVICE_NAME }}-93820292919.us-central1.run.app
+            DOCKER_IMAGE=uzunenes/inference:latest
             LOG_LEVEL=INFO
           secrets: |
             RUNPOD_TEMPLATE_ID=RUNPOD_TEMPLATE_ID:latest
