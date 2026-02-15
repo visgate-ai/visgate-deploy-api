@@ -102,6 +102,8 @@ async def orchestrate_deployment(deployment_id: str) -> None:
         
         internal_base = getattr(settings, "internal_webhook_base_url", "") or ""
         visgate_webhook = f"{internal_base}/internal/deployment-ready/{deployment_id}"
+        if settings.internal_webhook_secret:
+            visgate_webhook += f"?secret={settings.internal_webhook_secret}"
         env["VISGATE_WEBHOOK"] = visgate_webhook
 
         # Common data for all providers

@@ -13,6 +13,7 @@ router = APIRouter(prefix="/internal", tags=["internal"])
 @router.post("/deployment-ready/{deployment_id}")
 async def deployment_ready(
     deployment_id: str,
+    secret: str | None = None,
     x_visgate_secret: Annotated[
         str | None,
         Header(alias="X-Visgate-Internal-Secret"),
@@ -22,7 +23,8 @@ async def deployment_ready(
     Called by inference container when model is loaded. Sets status=ready and notifies user webhook.
     """
     settings = get_settings()
-    if settings.internal_webhook_secret and x_visgate_secret != settings.internal_webhook_secret:
+    provided_secret = x_visgate_secret or secret
+    if settings.internal_webhook_secret and provided_secret != settings.internal_webhook_secret:
         raise HTTPException(status_code=403, detail="Invalid internal secret")
 
     success = await mark_deployment_ready_and_notify(deployment_id)
