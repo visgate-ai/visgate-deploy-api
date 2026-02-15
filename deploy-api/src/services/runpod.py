@@ -82,7 +82,8 @@ class RunpodProvider(BaseInferenceProvider):
             "scalerValue": kwargs.get("scaler_value", 4),
             "workersMin": kwargs.get("workers_min", 0),
             "workersMax": kwargs.get("workers_max", 3),
-            "env": runpod_env
+            "env": runpod_env,
+            "containerDiskSizeGb": kwargs.get("container_disk_size_gb", 20)
         }
 
         with span("runpod.create_endpoint", {"name": name}):
