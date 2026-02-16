@@ -19,7 +19,7 @@ steps:
     args:
       - -c
       - |
-        cd deploy-api && pip install -q -r requirements.txt && PYTHONPATH=. python3 -m pytest tests/ -v --tb=short -x || true
+        cd deploy-api && pip install -q -r requirements.txt && PYTHONPATH=. python3 -m pytest tests/ -v --tb=short -x
     dir: .
 
   - name: "gcr.io/cloud-builders/docker"

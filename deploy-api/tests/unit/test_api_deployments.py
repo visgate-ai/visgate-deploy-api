@@ -24,14 +24,16 @@ def test_post_deployments_202(
     assert resp.status_code == 202
     data = resp.json()
     assert "deployment_id" in data
-    assert data["status"] == "validating"
+    assert data["status"] == "accepted_cold"
     assert data["model_id"] == deployment_create_payload["hf_model_id"]
     assert data["webhook_url"] == deployment_create_payload["user_webhook_url"]
+    assert data["path"] == "cold"
     
     # Verify task was enqueued
     mock_enqueue.assert_called_once()
     args, _ = mock_enqueue.call_args
     assert args[0] == data["deployment_id"]
+    assert args[1] == deployment_create_payload["user_runpod_key"]
 
 
 @patch("src.api.routes.deployments.enqueue_orchestration_task", new_callable=AsyncMock)
@@ -55,6 +57,7 @@ def test_post_deployments_with_model_name_provider(
     data = resp.json()
     assert data["model_id"] == "black-forest-labs/FLUX.1-schnell"
     assert "deployment_id" in data
+    assert data["status"] == "accepted_cold"
     
     mock_enqueue.assert_called_once()
 

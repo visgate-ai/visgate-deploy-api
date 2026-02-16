@@ -8,7 +8,7 @@ from fastapi.responses import JSONResponse
 
 from src.api.routes import deployments_router, health_router, internal_router, tasks_router
 from src.core.config import get_settings
-from src.core.errors import OrchestratorError
+from src.core.errors import OrchestratorError, RateLimitError
 from src.core.logging import configure_logging
 from src.core.telemetry import init_telemetry, instrument_fastapi
 
@@ -48,6 +48,11 @@ instrument_fastapi(app)
 @app.exception_handler(OrchestratorError)
 async def orchestrator_error_handler(request: Request, exc: OrchestratorError) -> JSONResponse:
     """Map custom exceptions to JSON response."""
+    headers = {}
+    if isinstance(exc, RateLimitError):
+        retry_after = exc.details.get("retry_after_seconds")
+        if retry_after:
+            headers["Retry-After"] = str(retry_after)
     return JSONResponse(
         status_code=exc.status_code,
         content={
@@ -55,6 +60,7 @@ async def orchestrator_error_handler(request: Request, exc: OrchestratorError) -
             "message": exc.message,
             "details": exc.details,
         },
+        headers=headers,
     )
 
 

@@ -8,6 +8,7 @@
 - Timed E2E and cleanup helper scripts for operational validation.
 
 ### Changed
+- Stateless auth now uses request-time Runpod API key and user hash (no Firestore API key lookup).
 - Deployment flow now keeps `ready` state even if user webhook delivery fails.
 - CI/CD and deploy scripts now force traffic to latest Cloud Run revision after deploy.
 - Runpod endpoint creation payload uses correct env schema (`[{key, value}]`).

@@ -40,7 +40,6 @@ Creates a deployment (async). Returns 202 with `deployment_id`; processing conti
 ```json
 {
   "hf_model_id": "black-forest-labs/FLUX.1-schnell",
-  "user_runpod_key": "rpa_xxx",
   "user_webhook_url": "https://your-app.com/webhook",
   "gpu_tier": "A40",
   "hf_token": "optional_for_gated_models"
@@ -51,10 +50,11 @@ Creates a deployment (async). Returns 202 with `deployment_id`; processing conti
 ```json
 {
   "deployment_id": "dep_2024_abc123",
-  "status": "validating",
+   "status": "accepted_cold",
   "model_id": "black-forest-labs/FLUX.1-schnell",
   "estimated_ready_seconds": 180,
   "webhook_url": "https://your-app.com/webhook",
+   "path": "cold",
   "created_at": "2024-02-14T10:00:00Z"
 }
 ```
@@ -138,6 +138,7 @@ See [inference/README.md](../inference/README.md) for supported models, job I/O,
 3. **Set secrets** in Secret Manager and env:
    - `RUNPOD_TEMPLATE_ID` – Runpod serverless template that uses our inference image (create via `scripts/create_runpod_template.py`).
    - `INTERNAL_WEBHOOK_SECRET` – Optional secret for `/internal/deployment-ready` callback.
+   - Tip: use `sm://SECRET_NAME` to auto-resolve from GCP Secret Manager.
 
 ## Troubleshooting
 
@@ -146,8 +147,8 @@ See [inference/README.md](../inference/README.md) for supported models, job I/O,
 | `HuggingFaceModelNotFoundError` | Model ID invalid or gated without token | Check `hf_model_id`; set `hf_token` for gated models. |
 | `RunpodInsufficientGPUError` | No GPU with enough VRAM | Choose larger `gpu_tier` or add GPUs in Runpod. |
 | `RUNPOD_TEMPLATE_ID not set` | Missing template | Create a Runpod template for your image and set env. |
-| 401 Unauthorized | Missing/invalid Bearer token | Send `Authorization: Bearer <api_key>`. |
-| 429 Rate limit | >100 req/min per API key | Back off; use `Retry-After` header. |
+| 401 Unauthorized | Missing/invalid Runpod key | Send `Authorization: Bearer <RUNPOD_API_KEY>`. |
+| 429 Rate limit | >100 req/min per user hash | Back off; use `Retry-After` header. |
 
 ## Performance
 

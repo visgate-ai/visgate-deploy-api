@@ -6,6 +6,14 @@ class ProviderEndpoint(TypedDict):
     url: str
     raw_response: Any
 
+
+class ProviderEndpointSummary(TypedDict):
+    id: str
+    name: str
+    status: str
+    url: Optional[str]
+    raw_response: Any
+
 class BaseInferenceProvider(ABC):
     """
     Abstract base class for inference providers (Runpod, Vast.ai, Lambda, etc.)
@@ -28,6 +36,11 @@ class BaseInferenceProvider(ABC):
     @abstractmethod
     async def delete_endpoint(self, endpoint_id: str, api_key: str) -> None:
         """Tear down an endpoint."""
+        pass
+
+    @abstractmethod
+    async def list_endpoints(self, api_key: str) -> list[ProviderEndpointSummary]:
+        """List endpoints for the current account."""
         pass
 
     @abstractmethod

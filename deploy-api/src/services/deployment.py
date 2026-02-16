@@ -31,6 +31,7 @@ from src.services.gpu_selection import select_gpu
 from src.services.huggingface import validate_model
 from src.services.provider_factory import get_provider
 import src.services.runpod # Trigger registration
+from src.services.secret_cache import get_secrets
 from src.services.webhook import notify
 
 def _now_iso() -> str:
@@ -85,7 +86,11 @@ async def _probe_runpod_readiness(endpoint_url: str, api_key: str) -> tuple[bool
     except Exception as exc:
         return False, str(exc)
 
-async def orchestrate_deployment(deployment_id: str) -> None:
+async def orchestrate_deployment(
+    deployment_id: str,
+    runpod_api_key: Optional[str] = None,
+    hf_token_override: Optional[str] = None,
+) -> None:
     """
     Background task: validate HF model -> select GPU -> create cloud endpoint via provider.
     """
@@ -113,9 +118,18 @@ async def orchestrate_deployment(deployment_id: str) -> None:
             return
 
         hf_model_id = doc.hf_model_id
-        user_runpod_key = doc.user_runpod_key_ref
+        cached = None
+        if not runpod_api_key:
+            cached = get_secrets(deployment_id)
+            runpod_api_key = cached.runpod_api_key if cached else None
+        if not runpod_api_key:
+            update_deployment(client, coll, deployment_id, {"status": "failed", "error": "Missing Runpod API key"})
+            log_step("ERROR", "Missing Runpod API key for orchestration")
+            return
+
+        user_runpod_key = runpod_api_key
         gpu_tier = doc.gpu_tier
-        hf_token: Optional[str] = doc.hf_token_ref
+        hf_token: Optional[str] = hf_token_override or (cached.hf_token if cached else None)
         # Logic: Default to runpod for now, but could be fetched from doc metadata
         provider_name = "runpod" 
         provider = get_provider(provider_name)
@@ -141,6 +155,7 @@ async def orchestrate_deployment(deployment_id: str) -> None:
         
         env = {
             "HF_MODEL_ID": hf_model_id,
+            "VISGATE_DEPLOYMENT_ID": deployment_id,
         }
         if hf_token:
             env["HF_TOKEN"] = hf_token
@@ -160,10 +175,20 @@ async def orchestrate_deployment(deployment_id: str) -> None:
         if settings.internal_webhook_secret:
             visgate_webhook += f"?secret={settings.internal_webhook_secret}"
         env["VISGATE_WEBHOOK"] = visgate_webhook
+        if settings.internal_webhook_secret:
+            env["VISGATE_INTERNAL_SECRET"] = settings.internal_webhook_secret
+        if settings.cleanup_idle_timeout_seconds:
+            env["CLEANUP_IDLE_TIMEOUT_SECONDS"] = str(settings.cleanup_idle_timeout_seconds)
+        if settings.cleanup_failure_threshold:
+            env["CLEANUP_FAILURE_THRESHOLD"] = str(settings.cleanup_failure_threshold)
+        if internal_base:
+            env["VISGATE_LOG_TUNNEL"] = f"{internal_base}/internal/logs/{deployment_id}"
 
         # Common data for all providers
+        endpoint_name = doc.endpoint_name or f"visgate-{deployment_id}"
+        locations = (doc.region or settings.runpod_default_locations).strip()
         endpoint_data = await provider.create_endpoint(
-            name=f"visgate-{deployment_id}",
+            name=endpoint_name,
             gpu_id=gpu_id,
             image=settings.docker_image,
             env=env,
@@ -174,7 +199,8 @@ async def orchestrate_deployment(deployment_id: str) -> None:
             workers_max=2,
             idle_timeout=300,
             scaler_value=2,
-            volume_in_gb=settings.runpod_volume_size_gb
+            volume_in_gb=settings.runpod_volume_size_gb,
+            locations=locations,
         )
         
         endpoint_id = endpoint_data["id"]

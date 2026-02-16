@@ -28,7 +28,14 @@ def _redact(message: str) -> str:
 
 def _redact_dict(obj: Any) -> Any:
     if isinstance(obj, dict):
-        return {k: _redact_dict(v) for k, v in obj.items()}
+        redacted = {}
+        for k, v in obj.items():
+            key_lower = str(k).lower()
+            if any(s in key_lower for s in ("api_key", "token", "secret", "password", "authorization")):
+                redacted[k] = "***REDACTED***"
+            else:
+                redacted[k] = _redact_dict(v)
+        return redacted
     if isinstance(obj, list):
         return [_redact_dict(i) for i in obj]
     if isinstance(obj, str):

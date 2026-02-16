@@ -74,6 +74,10 @@ class Settings(BaseSettings):
         default="https://api.runpod.io/graphql",
         description="Runpod GraphQL API URL",
     )
+    runpod_default_locations: str = Field(
+        default="US",
+        description="Default Runpod locations (comma-separated)",
+    )
 
     # Webhook
     webhook_timeout_seconds: int = Field(default=10, ge=1, le=60)
@@ -104,6 +108,34 @@ class Settings(BaseSettings):
         default=False,
         description="Reuse ready endpoints for same model/key instead of creating new endpoint",
     )
+    stateless_mode: bool = Field(
+        default=True,
+        description="Avoid storing user secrets; use in-memory orchestration",
+    )
+
+    # Warm pool policy
+    warm_pool_always_on_models: str = Field(
+        default="",
+        description="Comma-separated HF model IDs to keep warm",
+    )
+    warm_pool_scheduled_models: str = Field(
+        default="",
+        description="Comma-separated HF model IDs for scheduled warm windows",
+    )
+    warm_pool_schedule_hours: str = Field(
+        default="09-21",
+        description="Warm schedule hours in HH-HH, comma-separated windows",
+    )
+    warm_pool_schedule_timezone: str = Field(
+        default="UTC",
+        description="Timezone for scheduled warm windows",
+    )
+
+    # Log tunneling and cleanup
+    log_stream_max_entries: int = Field(default=500, ge=10, le=5000)
+    log_stream_ttl_seconds: int = Field(default=3600, ge=60, le=86400)
+    cleanup_idle_timeout_seconds: int = Field(default=900, ge=60, le=7200)
+    cleanup_failure_threshold: int = Field(default=3, ge=1, le=10)
 
     @field_validator("log_level", mode="before")
     @classmethod
@@ -114,8 +146,36 @@ class Settings(BaseSettings):
             raise ValueError(f"log_level must be one of {allowed}")
         return u
 
+    def resolve_secrets(self) -> None:
+        """Resolve Secret Manager references for sensitive settings."""
+        def _resolve(value: str) -> str:
+            if not value:
+                return value
+            if not value.startswith("sm://"):
+                return value
+            secret_name = value.removeprefix("sm://")
+            project = self.gcp_project_id
+            try:
+                from google.cloud import secretmanager
+            except Exception:
+                return value
+            client = secretmanager.SecretManagerServiceClient()
+            secret_path = f"projects/{project}/secrets/{secret_name}/versions/latest"
+            try:
+                response = client.access_secret_version(request={"name": secret_path})
+                return response.payload.data.decode("utf-8")
+            except Exception:
+                return value
+
+        self.runpod_template_id = _resolve(self.runpod_template_id)
+        self.internal_webhook_secret = _resolve(self.internal_webhook_secret)
+        self.aws_access_key_id = _resolve(self.aws_access_key_id)
+        self.aws_secret_access_key = _resolve(self.aws_secret_access_key)
+
 
 @lru_cache
 def get_settings() -> Settings:
     """Return cached settings instance."""
-    return Settings()
+    settings = Settings()
+    settings.resolve_secrets()
+    return settings

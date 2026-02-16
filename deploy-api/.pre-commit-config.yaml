@@ -11,10 +11,10 @@ repos:
     hooks:
       - id: mypy
         name: mypy
-        entry: bash -c 'mypy src/ || true'
+        entry: bash -c 'mypy src/'
         language: system
       - id: pytest
         name: pytest
-        entry: bash -c 'cd deployment-orchestrator && PYTHONPATH=. python -m pytest tests/ -q || true'
+        entry: bash -c 'cd deploy-api && PYTHONPATH=. python -m pytest tests/ -q'
         language: system
         pass_filenames: false

@@ -7,7 +7,7 @@ This document contains steps for running the service locally, testing endpoints,
 ## 1. Running Locally
 
 ```bash
-cd deployment-orchestrator
+cd deploy-api
 python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
 export GCP_PROJECT_ID=visgate
@@ -104,10 +104,9 @@ Starts a new deployment. The process continues in the background; returns 202 im
 ```bash
 curl -s -X POST http://127.0.0.1:8080/v1/deployments \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer YOUR_API_KEY" \
+  -H "Authorization: Bearer YOUR_RUNPOD_API_KEY" \
   -d '{
     "hf_model_id": "black-forest-labs/FLUX.1-schnell",
-    "user_runpod_key": "rpa_xxx",
     "user_webhook_url": "https://example.com/webhook",
     "gpu_tier": "A40"
   }'
@@ -118,11 +117,10 @@ curl -s -X POST http://127.0.0.1:8080/v1/deployments \
 ```bash
 curl -s -X POST http://127.0.0.1:8080/v1/deployments \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer YOUR_API_KEY" \
+  -H "Authorization: Bearer YOUR_RUNPOD_API_KEY" \
   -d '{
     "model_name": "veo3",
     "provider": "fal",
-    "user_runpod_key": "rpa_xxx",
     "user_webhook_url": "https://example.com/webhook",
     "gpu_tier": "A40"
   }'
@@ -135,18 +133,19 @@ If `model_name` + `provider` are provided, they are converted to Hugging Face ID
 ```json
 {
   "deployment_id": "dep_2026_c1badc17",
-  "status": "validating",
+  "status": "accepted_cold",
   "model_id": "black-forest-labs/FLUX.1-schnell",
   "estimated_ready_seconds": 180,
   "webhook_url": "https://example.com/webhook",
+  "path": "cold",
   "created_at": "2026-02-14T13:28:55.130342Z"
 }
 ```
 
-**401 – Unauthorized (Missing/Invalid Bearer):**
+**401 – Unauthorized (Missing/Invalid Runpod Key):**
 
 ```json
-{"error":"UnauthorizedError","message":"Missing or invalid API key","details":{}}
+{"error":"UnauthorizedError","message":"Missing or invalid Runpod API key","details":{}}
 ```
 
 ---
@@ -158,7 +157,7 @@ Returns current status, logs, and error info for a specific deployment.
 **Request:**
 
 ```bash
-curl -s -H "Authorization: Bearer YOUR_API_KEY" \
+curl -s -H "Authorization: Bearer YOUR_RUNPOD_API_KEY" \
   "http://127.0.0.1:8080/v1/deployments/dep_2026_a3686d66"
 ```
 
@@ -194,7 +193,7 @@ Terminates the Runpod endpoint and marks the deployment as deleted.
 **Request:**
 
 ```bash
-curl -s -X DELETE -H "Authorization: Bearer YOUR_API_KEY" \
+curl -s -X DELETE -H "Authorization: Bearer YOUR_RUNPOD_API_KEY" \
   "http://127.0.0.1:8080/v1/deployments/dep_2026_xxxxx"
 ```
 
@@ -233,7 +232,7 @@ curl -s -X POST "http://127.0.0.1:8080/internal/deployment-ready/dep_2026_a3686d
 | 200 | - | GET successful |
 | 202 | - | POST /v1/deployments accepted |
 | 204 | - | DELETE successful |
-| 401 | UnauthorizedError | Missing or invalid Bearer token |
+| 401 | UnauthorizedError | Missing or invalid Runpod API key |
 | 404 | DeploymentNotFoundError | deployment_id not found or access denied |
 | 429 | RateLimitError | 100 requests per minute limit exceeded |
 | 503 | - | Readiness: Firestore connection error |
@@ -247,14 +246,14 @@ To test all endpoints sequentially:
 ```bash
 #!/bin/bash
 BASE="http://127.0.0.1:8080"
-KEY="Bearer test-api-key-12345"
+KEY="Bearer rpa_test_key_placeholder"
 
 echo "1. Health:" && curl -s "$BASE/health"
 echo -e "\n2. Root:" && curl -s "$BASE/"
 echo -e "\n3. Readiness:" && curl -s "$BASE/readiness"
 echo -e "\n4. POST deployment:"
 RESP=$(curl -s -X POST "$BASE/v1/deployments" -H "Content-Type: application/json" -H "Authorization: $KEY" \
-  -d '{"hf_model_id":"stabilityai/sdxl-turbo","user_runpod_key":"rpa_test","user_webhook_url":"https://example.com/hook","gpu_tier":"A40"}')
+  -d '{"hf_model_id":"stabilityai/sdxl-turbo","user_webhook_url":"https://example.com/hook","gpu_tier":"A40"}')
 echo "$RESP"
 DEP_ID=$(echo "$RESP" | python3 -c "import sys,json; print(json.load(sys.stdin).get('deployment_id',''))")
 echo -e "\n5. GET $DEP_ID:" && curl -s -H "Authorization: $KEY" "$BASE/v1/deployments/$DEP_ID"

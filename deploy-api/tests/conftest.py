@@ -49,8 +49,6 @@ def _make_firestore_mock() -> MagicMock:
 def firestore_mock(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
     """Inject mock Firestore into app."""
     _firestore_store.clear()
-    # Seed a valid API key
-    _firestore_store["test-api-key-12345"] = {"active": True, "owner": "pytest"}
     mock_client = _make_firestore_mock()
     from src.api import dependencies
     monkeypatch.setattr(dependencies, "get_firestore_client", lambda project_id=None: mock_client)
@@ -66,8 +64,8 @@ def client(firestore_mock: MagicMock) -> TestClient:
 
 @pytest.fixture
 def auth_headers() -> dict:
-    """Bearer token for tests (accepted by current auth)."""
-    return {"Authorization": "Bearer test-api-key-12345"}
+    """Bearer token for tests (Runpod API key)."""
+    return {"Authorization": "Bearer rpa_test_key_placeholder"}
 
 
 @pytest.fixture

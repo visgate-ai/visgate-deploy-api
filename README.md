@@ -36,7 +36,7 @@ Current hosted endpoint:
 
 - `https://visgate-deploy-api-wxup7pxrsa-uc.a.run.app`
 
-Use your own API key in `Authorization: Bearer <VISGATE_API_KEY>`.
+Use your Runpod key in `Authorization: Bearer <RUNPOD_API_KEY>`.
 
 ## Quick Start (Hosted)
 
@@ -44,12 +44,11 @@ Use your own API key in `Authorization: Bearer <VISGATE_API_KEY>`.
 
 ```bash
 curl -X POST "https://visgate-deploy-api-wxup7pxrsa-uc.a.run.app/v1/deployments" \
-  -H "Authorization: Bearer <VISGATE_API_KEY>" \
+  -H "Authorization: Bearer <RUNPOD_API_KEY>" \
   -H "Content-Type: application/json" \
   -d '{
     "hf_model_id": "stabilityai/sd-turbo",
     "gpu_tier": "A10",
-    "user_runpod_key": "rpa_xxx",
     "hf_token": "hf_xxx_optional_for_gated_models",
     "user_webhook_url": "https://your-app.com/webhooks/visgate"
   }'
@@ -58,7 +57,7 @@ curl -X POST "https://visgate-deploy-api-wxup7pxrsa-uc.a.run.app/v1/deployments"
 2) Poll deployment status
 
 ```bash
-curl -H "Authorization: Bearer <VISGATE_API_KEY>" \
+curl -H "Authorization: Bearer <RUNPOD_API_KEY>" \
   "https://visgate-deploy-api-wxup7pxrsa-uc.a.run.app/v1/deployments/<deployment_id>"
 ```
 

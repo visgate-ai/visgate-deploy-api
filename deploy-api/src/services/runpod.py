@@ -7,7 +7,7 @@ import httpx
 from src.core.errors import RunpodAPIError
 from src.core.logging import structured_log
 from src.core.telemetry import record_runpod_api_error, span
-from src.services.base_provider import BaseInferenceProvider, ProviderEndpoint
+from src.services.base_provider import BaseInferenceProvider, ProviderEndpoint, ProviderEndpointSummary
 from src.services.provider_factory import register_provider
 
 
@@ -89,7 +89,7 @@ class RunpodProvider(BaseInferenceProvider):
             input_obj["volumeMountPath"] = kwargs.get("volume_mount_path", "/runpod-volume")
 
         with span("runpod.create_endpoint", {"name": name}):
-            structured_log("INFO", f"Runpod create_endpoint payload: {input_obj}")
+            structured_log("INFO", "Runpod create_endpoint requested", metadata={"name": name, "gpu_id": gpu_id})
             data = await self._graphql_request(api_key, mutation, {"input": input_obj})
             result = data.get("saveEndpoint")
             if not result:
@@ -109,6 +109,32 @@ class RunpodProvider(BaseInferenceProvider):
         }
         """
         await self._graphql_request(api_key, mutation, {"id": endpoint_id})
+
+    async def list_endpoints(self, api_key: str) -> list[ProviderEndpointSummary]:
+        query = """
+        query MyEndpoints {
+          myEndpoints {
+            id
+            name
+            status
+          }
+        }
+        """
+        data = await self._graphql_request(api_key, query)
+        endpoints = data.get("myEndpoints") or []
+        summaries: list[ProviderEndpointSummary] = []
+        for ep in endpoints:
+            endpoint_id = ep.get("id")
+            summaries.append(
+                {
+                    "id": endpoint_id,
+                    "name": ep.get("name", ""),
+                    "status": ep.get("status", ""),
+                    "url": self.get_run_url(endpoint_id) if endpoint_id else None,
+                    "raw_response": ep,
+                }
+            )
+        return summaries
 
     def get_run_url(self, endpoint_id: str) -> str:
         return f"https://api.runpod.ai/v2/{endpoint_id}/run"

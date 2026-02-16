@@ -32,10 +32,10 @@ class DeploymentDoc:
     deployment_id: str
     status: str
     hf_model_id: str
-    user_runpod_key_ref: str  # Secret Manager path or encrypted ref
     user_webhook_url: str
+    user_runpod_key_ref: Optional[str] = None  # Deprecated: avoid storing user secrets
     gpu_tier: Optional[str] = None
-    hf_token_ref: Optional[str] = None
+    hf_token_ref: Optional[str] = None  # Deprecated: avoid storing user secrets
     runpod_endpoint_id: Optional[str] = None
     endpoint_url: Optional[str] = None
     gpu_allocated: Optional[str] = None
@@ -45,6 +45,11 @@ class DeploymentDoc:
     created_at: str = ""
     ready_at: Optional[str] = None
     api_key_id: Optional[str] = None
+    user_hash: Optional[str] = None
+    provider: Optional[str] = None
+    endpoint_name: Optional[str] = None
+    pool_policy: Optional[str] = None
+    region: Optional[str] = None
 
     def to_firestore_dict(self) -> dict[str, Any]:
         return {
@@ -64,6 +69,11 @@ class DeploymentDoc:
             "created_at": self.created_at,
             "ready_at": self.ready_at,
             "api_key_id": self.api_key_id,
+            "user_hash": self.user_hash,
+            "provider": self.provider,
+            "endpoint_name": self.endpoint_name,
+            "pool_policy": self.pool_policy,
+            "region": self.region,
         }
 
     @classmethod
@@ -73,7 +83,7 @@ class DeploymentDoc:
             deployment_id=d.get("deployment_id", ""),
             status=d.get("status", "validating"),
             hf_model_id=d.get("hf_model_id", ""),
-            user_runpod_key_ref=d.get("user_runpod_key_ref", ""),
+            user_runpod_key_ref=d.get("user_runpod_key_ref"),
             user_webhook_url=d.get("user_webhook_url", ""),
             gpu_tier=d.get("gpu_tier"),
             hf_token_ref=d.get("hf_token_ref"),
@@ -86,4 +96,9 @@ class DeploymentDoc:
             created_at=d.get("created_at", ""),
             ready_at=d.get("ready_at"),
             api_key_id=d.get("api_key_id"),
+            user_hash=d.get("user_hash"),
+            provider=d.get("provider"),
+            endpoint_name=d.get("endpoint_name"),
+            pool_policy=d.get("pool_policy"),
+            region=d.get("region"),
         )

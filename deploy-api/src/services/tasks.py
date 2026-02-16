@@ -4,14 +4,16 @@ import asyncio
 import json
 
 from google.cloud import tasks_v2
-from google.protobuf import timestamp_pb2
-
 from src.core.config import get_settings
 from src.core.logging import structured_log
 from src.services.deployment import orchestrate_deployment
 
 
-async def enqueue_orchestration_task(deployment_id: str) -> None:
+async def enqueue_orchestration_task(
+    deployment_id: str,
+    runpod_api_key: str,
+    hf_token: str | None,
+) -> None:
     """
     Enqueue a task to orchestrate deployment.
     If cloud_tasks_queue_path is configured, uses Cloud Tasks.
@@ -20,13 +22,13 @@ async def enqueue_orchestration_task(deployment_id: str) -> None:
     settings = get_settings()
     queue_path = settings.cloud_tasks_queue_path
 
-    if not queue_path:
+    if settings.stateless_mode or not queue_path:
         structured_log(
             "WARNING",
-            "Cloud Tasks not confused; falling back to asyncio (unreliable in Cloud Run)",
+            "Stateless mode or missing Cloud Tasks; using in-process orchestration",
             deployment_id=deployment_id,
         )
-        asyncio.create_task(orchestrate_deployment(deployment_id))
+        asyncio.create_task(orchestrate_deployment(deployment_id, runpod_api_key, hf_token))
         return
 
     # Use internal URL for the worker
@@ -41,11 +43,11 @@ async def enqueue_orchestration_task(deployment_id: str) -> None:
         )
         # Fallback? Or fail? Better to fail or fallback.
         # Fallback to async for now to avoid total breakage if config is incomplete
-        asyncio.create_task(orchestrate_deployment(deployment_id))
+        asyncio.create_task(orchestrate_deployment(deployment_id, runpod_api_key, hf_token))
         return
 
     url = f"{base_url}/internal/tasks/orchestrate-deployment"
-    payload = {"deployment_id": deployment_id}
+    payload = {"deployment_id": deployment_id, "runpod_api_key": runpod_api_key, "hf_token": hf_token}
     
     try:
         client = tasks_v2.CloudTasksClient()
@@ -89,4 +91,4 @@ async def enqueue_orchestration_task(deployment_id: str) -> None:
             error={"message": str(e)},
         )
         # Fallback to save the day
-        asyncio.create_task(orchestrate_deployment(deployment_id))
+        asyncio.create_task(orchestrate_deployment(deployment_id, runpod_api_key, hf_token))

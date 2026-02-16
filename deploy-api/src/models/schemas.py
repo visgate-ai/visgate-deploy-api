@@ -17,10 +17,15 @@ class DeploymentCreate(BaseModel):
     hf_model_id: Optional[str] = Field(default=None, min_length=1, max_length=256, description="Hugging Face model ID (or use model_name+provider)")
     model_name: Optional[str] = Field(default=None, min_length=1, max_length=128, description="Model name from get_models (e.g. veo3); resolved to HF ID via get_hf_name")
     provider: Optional[str] = Field(default=None, max_length=64, description="Provider from get_models (e.g. fal)")
-    user_runpod_key: str = Field(..., min_length=1, description="Runpod API key or secret ref")
+    user_runpod_key: Optional[str] = Field(default=None, min_length=1, description="Runpod API key (optional if provided via Authorization header)")
     user_webhook_url: HttpUrl = Field(..., description="URL to notify when deployment is ready")
     gpu_tier: Optional[str] = Field(default=None, max_length=64, description="e.g. A40; auto-select if omitted")
     hf_token: Optional[str] = Field(default=None, description="Optional HF token for gated models")
+    region: Optional[str] = Field(default=None, max_length=32, description="Preferred Runpod region/location")
+    task: Optional[Literal["text2img", "image2img", "text2video"]] = Field(
+        default="text2img",
+        description="Intended task for compatibility checks",
+    )
 
 
 # --- Response ---
@@ -28,7 +33,7 @@ class DeploymentResponse202(BaseModel):
     """202 Accepted response for POST /v1/deployments."""
 
     deployment_id: str
-    status: Literal["validating", "creating_endpoint", "ready"] = "validating"
+    status: Literal["warm_ready", "accepted_cold", "validating", "creating_endpoint", "ready"] = "accepted_cold"
     model_id: str
     estimated_ready_seconds: int = Field(default=180, ge=0, le=600)
     estimated_ready_at: datetime
@@ -36,6 +41,7 @@ class DeploymentResponse202(BaseModel):
     stream_url: str
     webhook_url: str
     endpoint_url: Optional[str] = None
+    path: Literal["warm", "cold"] = "cold"
     created_at: datetime
 
 

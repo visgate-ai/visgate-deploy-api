@@ -14,6 +14,8 @@ router = APIRouter(prefix="/internal/tasks", tags=["tasks"])
 
 class OrchestrateDeploymentRequest(BaseModel):
     deployment_id: str
+    runpod_api_key: str
+    hf_token: str | None = None
 
 
 @router.post(
@@ -35,6 +37,6 @@ async def task_orchestrate_deployment(body: OrchestrateDeploymentRequest) -> dic
     )
     
     # Run synchronously so Cloud Run keeps instance alive
-    await orchestrate_deployment(body.deployment_id)
+    await orchestrate_deployment(body.deployment_id, body.runpod_api_key, body.hf_token)
     
     return {"status": "ok"}
