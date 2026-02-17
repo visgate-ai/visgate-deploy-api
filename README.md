@@ -120,10 +120,11 @@ python3 scripts/e2e_timed_istanbul.py
 
 Recent real runs:
 
-| Deployment | T1 Deploy -> Ready | T2 Inference | Total |
-|---|---:|---:|---:|
-| `dep_2026_416968b0` | 72.12s | 8.89s | 81.01s |
-| `dep_2026_24644278` | 37.61s | 7.55s | 45.16s |
+| Deployment | Model | Deploy -> Ready | Inference (runsync) | Runpod delay | Runpod execution |
+|---|---|---:|---:|---:|---:|
+| `dep_2026_95f8d6bf` | `crynux-network/sdxl-turbo` | 256.79s | 17.07s | 0.149s | 15.39s |
+| `dep_2026_416968b0` | `unknown` | 72.12s | 8.89s | - | - |
+| `dep_2026_24644278` | `unknown` | 37.61s | 7.55s | - | - |
 
 ## Cleanup Helpers
 
