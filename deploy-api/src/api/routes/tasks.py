@@ -16,6 +16,10 @@ class OrchestrateDeploymentRequest(BaseModel):
     deployment_id: str
     runpod_api_key: str
     hf_token: str | None = None
+    aws_access_key_id: str | None = None
+    aws_secret_access_key: str | None = None
+    aws_endpoint_url: str | None = None
+    s3_model_url: str | None = None
 
 
 @router.post(
@@ -37,6 +41,14 @@ async def task_orchestrate_deployment(body: OrchestrateDeploymentRequest) -> dic
     )
     
     # Run synchronously so Cloud Run keeps instance alive
-    await orchestrate_deployment(body.deployment_id, body.runpod_api_key, body.hf_token)
+    await orchestrate_deployment(
+        body.deployment_id,
+        body.runpod_api_key,
+        body.hf_token,
+        body.aws_access_key_id,
+        body.aws_secret_access_key,
+        body.aws_endpoint_url,
+        body.s3_model_url,
+    )
     
     return {"status": "ok"}

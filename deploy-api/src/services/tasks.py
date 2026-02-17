@@ -13,6 +13,10 @@ async def enqueue_orchestration_task(
     deployment_id: str,
     runpod_api_key: str,
     hf_token: str | None,
+    aws_access_key_id: str | None = None,
+    aws_secret_access_key: str | None = None,
+    aws_endpoint_url: str | None = None,
+    s3_model_url: str | None = None,
 ) -> None:
     """
     Enqueue a task to orchestrate deployment.
@@ -28,7 +32,17 @@ async def enqueue_orchestration_task(
             "Stateless mode or missing Cloud Tasks; using in-process orchestration",
             deployment_id=deployment_id,
         )
-        asyncio.create_task(orchestrate_deployment(deployment_id, runpod_api_key, hf_token))
+        asyncio.create_task(
+            orchestrate_deployment(
+                deployment_id,
+                runpod_api_key,
+                hf_token,
+                aws_access_key_id,
+                aws_secret_access_key,
+                aws_endpoint_url,
+                s3_model_url,
+            )
+        )
         return
 
     # Use internal URL for the worker
@@ -43,11 +57,29 @@ async def enqueue_orchestration_task(
         )
         # Fallback? Or fail? Better to fail or fallback.
         # Fallback to async for now to avoid total breakage if config is incomplete
-        asyncio.create_task(orchestrate_deployment(deployment_id, runpod_api_key, hf_token))
+        asyncio.create_task(
+            orchestrate_deployment(
+                deployment_id,
+                runpod_api_key,
+                hf_token,
+                aws_access_key_id,
+                aws_secret_access_key,
+                aws_endpoint_url,
+                s3_model_url,
+            )
+        )
         return
 
     url = f"{base_url}/internal/tasks/orchestrate-deployment"
-    payload = {"deployment_id": deployment_id, "runpod_api_key": runpod_api_key, "hf_token": hf_token}
+    payload = {
+        "deployment_id": deployment_id,
+        "runpod_api_key": runpod_api_key,
+        "hf_token": hf_token,
+        "aws_access_key_id": aws_access_key_id,
+        "aws_secret_access_key": aws_secret_access_key,
+        "aws_endpoint_url": aws_endpoint_url,
+        "s3_model_url": s3_model_url,
+    }
     
     try:
         client = tasks_v2.CloudTasksClient()
@@ -91,4 +123,14 @@ async def enqueue_orchestration_task(
             error={"message": str(e)},
         )
         # Fallback to save the day
-        asyncio.create_task(orchestrate_deployment(deployment_id, runpod_api_key, hf_token))
+        asyncio.create_task(
+            orchestrate_deployment(
+                deployment_id,
+                runpod_api_key,
+                hf_token,
+                aws_access_key_id,
+                aws_secret_access_key,
+                aws_endpoint_url,
+                s3_model_url,
+            )
+        )

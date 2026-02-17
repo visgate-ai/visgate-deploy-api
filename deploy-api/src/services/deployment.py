@@ -90,6 +90,10 @@ async def orchestrate_deployment(
     deployment_id: str,
     runpod_api_key: Optional[str] = None,
     hf_token_override: Optional[str] = None,
+    aws_access_key_id: Optional[str] = None,
+    aws_secret_access_key: Optional[str] = None,
+    aws_endpoint_url: Optional[str] = None,
+    s3_model_url: Optional[str] = None,
 ) -> None:
     """
     Background task: validate HF model -> select GPU -> create cloud endpoint via provider.
@@ -122,6 +126,15 @@ async def orchestrate_deployment(
         if not runpod_api_key:
             cached = get_secrets(deployment_id)
             runpod_api_key = cached.runpod_api_key if cached else None
+        if cached:
+            if aws_access_key_id is None:
+                aws_access_key_id = cached.aws_access_key_id
+            if aws_secret_access_key is None:
+                aws_secret_access_key = cached.aws_secret_access_key
+            if aws_endpoint_url is None:
+                aws_endpoint_url = cached.aws_endpoint_url
+            if s3_model_url is None:
+                s3_model_url = cached.s3_model_url
         if not runpod_api_key:
             update_deployment(client, coll, deployment_id, {"status": "failed", "error": "Missing Runpod API key"})
             log_step("ERROR", "Missing Runpod API key for orchestration")
@@ -161,14 +174,19 @@ async def orchestrate_deployment(
             env["HF_TOKEN"] = hf_token
         
         # Add AWS/S3 credentials for optimized loader
-        if settings.aws_access_key_id:
-            env["AWS_ACCESS_KEY_ID"] = settings.aws_access_key_id
-        if settings.aws_secret_access_key:
-            env["AWS_SECRET_ACCESS_KEY"] = settings.aws_secret_access_key
-        if settings.aws_endpoint_url:
-            env["AWS_ENDPOINT_URL"] = settings.aws_endpoint_url
-        if settings.s3_model_url:
-            env["S3_MODEL_URL"] = settings.s3_model_url
+        effective_access_key = aws_access_key_id or settings.aws_access_key_id
+        effective_secret_key = aws_secret_access_key or settings.aws_secret_access_key
+        effective_endpoint = aws_endpoint_url or settings.aws_endpoint_url
+        effective_s3_model_url = s3_model_url or settings.s3_model_url
+
+        if effective_access_key:
+            env["AWS_ACCESS_KEY_ID"] = effective_access_key
+        if effective_secret_key:
+            env["AWS_SECRET_ACCESS_KEY"] = effective_secret_key
+        if effective_endpoint:
+            env["AWS_ENDPOINT_URL"] = effective_endpoint
+        if effective_s3_model_url:
+            env["S3_MODEL_URL"] = effective_s3_model_url
 
         internal_base = getattr(settings, "internal_webhook_base_url", "") or ""
         visgate_webhook = f"{internal_base}/internal/deployment-ready/{deployment_id}"

@@ -26,6 +26,26 @@ class DeploymentCreate(BaseModel):
         default="text2img",
         description="Intended task for compatibility checks",
     )
+    cache_scope: Optional[Literal["off", "shared", "private"]] = Field(
+        default="off",
+        description="Model cache scope: off, shared (platform), or private (user-provided)",
+    )
+    user_s3_url: Optional[str] = Field(
+        default=None,
+        description="Private cache base URL (S3/R2/Minio). Used when cache_scope=private",
+    )
+    user_aws_access_key_id: Optional[str] = Field(
+        default=None,
+        description="Private cache AWS access key (cache_scope=private)",
+    )
+    user_aws_secret_access_key: Optional[str] = Field(
+        default=None,
+        description="Private cache AWS secret access key (cache_scope=private)",
+    )
+    user_aws_endpoint_url: Optional[str] = Field(
+        default=None,
+        description="Private cache endpoint URL (cache_scope=private)",
+    )
 
 
 # --- Response ---

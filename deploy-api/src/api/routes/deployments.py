@@ -20,7 +20,7 @@ from src.models.schemas import (
     LogEntrySchema,
 )
 from src.services.deployment import mark_deployment_ready_and_notify
-from src.services.endpoint_naming import pool_endpoint_name, user_endpoint_name
+from src.services.endpoint_naming import model_slug, pool_endpoint_name, user_endpoint_name
 from src.services.firestore_repo import get_deployment, set_deployment
 from src.services.log_tunnel import get_live_logs_since
 from src.services.model_resolver import get_hf_name
@@ -119,6 +119,10 @@ def _is_warm_status(status: str) -> bool:
     return status.upper() not in {"TERMINATED", "DELETED", "FAILED", "STOPPED"}
 
 
+def _build_s3_model_url(base_url: str, path_suffix: str) -> str:
+    return f"{base_url.rstrip('/')}/{path_suffix.strip('/')}"
+
+
 def _resolve_hf_model_id(body: DeploymentCreate) -> str:
     """Resolve to HF model ID: either hf_model_id or get_hf_name(model_name, provider)."""
     if body.hf_model_id:
@@ -170,6 +174,28 @@ async def create_deployment(
     runpod_api_key = _resolve_runpod_key(body, ctx)
     if not runpod_api_key:
         raise InvalidDeploymentRequestError("Missing Runpod API key (Authorization header or user_runpod_key)")
+
+    cache_scope = (body.cache_scope or "off").lower()
+    if cache_scope not in {"off", "shared", "private"}:
+        raise InvalidDeploymentRequestError("cache_scope must be one of: off, shared, private")
+
+    private_s3_url = None
+    private_access_key = None
+    private_secret_key = None
+    private_endpoint = None
+
+    if cache_scope == "shared":
+        if not settings.s3_model_url:
+            raise InvalidDeploymentRequestError("shared cache requires S3_MODEL_URL configured on service")
+    if cache_scope == "private":
+        if not body.user_s3_url:
+            raise InvalidDeploymentRequestError("private cache requires user_s3_url")
+        if not body.user_aws_access_key_id or not body.user_aws_secret_access_key:
+            raise InvalidDeploymentRequestError("private cache requires user_aws_access_key_id and user_aws_secret_access_key")
+        private_s3_url = body.user_s3_url
+        private_access_key = body.user_aws_access_key_id
+        private_secret_key = body.user_aws_secret_access_key
+        private_endpoint = body.user_aws_endpoint_url
 
     pool_policy = choose_pool_policy(hf_model_id)
     provider = get_provider("runpod")
@@ -249,8 +275,31 @@ async def create_deployment(
     )
     set_deployment(firestore_client, settings.firestore_collection_deployments, doc)
 
-    store_secrets(deployment_id, runpod_api_key, body.hf_token)
-    await enqueue_orchestration_task(deployment_id, runpod_api_key, body.hf_token)
+    model_path = model_slug(hf_model_id)
+    s3_model_url = None
+    if cache_scope == "shared" and settings.s3_model_url:
+        s3_model_url = _build_s3_model_url(settings.s3_model_url, model_path)
+    if cache_scope == "private" and private_s3_url:
+        s3_model_url = _build_s3_model_url(private_s3_url, f"{ctx.user_hash}/{model_path}")
+
+    store_secrets(
+        deployment_id,
+        runpod_api_key,
+        body.hf_token,
+        aws_access_key_id=private_access_key,
+        aws_secret_access_key=private_secret_key,
+        aws_endpoint_url=private_endpoint,
+        s3_model_url=s3_model_url,
+    )
+    await enqueue_orchestration_task(
+        deployment_id,
+        runpod_api_key,
+        body.hf_token,
+        private_access_key,
+        private_secret_key,
+        private_endpoint,
+        s3_model_url,
+    )
     record_deployment_created()
 
     return DeploymentResponse202(

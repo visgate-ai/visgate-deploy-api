@@ -50,9 +50,15 @@ curl -X POST "https://visgate-deploy-api-wxup7pxrsa-uc.a.run.app/v1/deployments"
     "hf_model_id": "stabilityai/sd-turbo",
     "gpu_tier": "A10",
     "hf_token": "hf_xxx_optional_for_gated_models",
-    "user_webhook_url": "https://your-app.com/webhooks/visgate"
+    "user_webhook_url": "https://your-app.com/webhooks/visgate",
+    "cache_scope": "shared"
   }'
 ```
+
+Cache options:
+- `cache_scope: "shared"` uses platform S3 cache.
+- `cache_scope: "private"` requires user S3 credentials and base URL.
+- `cache_scope: "off"` disables cache (default).
 
 2) Poll deployment status
 
