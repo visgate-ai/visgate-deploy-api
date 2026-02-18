@@ -28,6 +28,7 @@ from src.services.firestore_repo import (
     update_deployment,
 )
 from src.services.gpu_selection import select_gpu
+from src.services.gpu_selection import select_gpu_candidates
 from src.services.huggingface import validate_model
 from src.services.provider_factory import get_provider
 import src.services.runpod # Trigger registration
@@ -115,6 +116,19 @@ async def orchestrate_deployment(
         )
         append_log(client, coll, deployment_id, level, msg)
 
+    def is_capacity_error(message: str) -> bool:
+        m = (message or "").lower()
+        markers = [
+            "insufficient",
+            "no gpu",
+            "no capacity",
+            "out of capacity",
+            "unavailable",
+            "stock",
+            "resource exhausted",
+        ]
+        return any(marker in m for marker in markers)
+
     try:
         doc = get_deployment(client, coll, deployment_id)
         if not doc:
@@ -160,8 +174,14 @@ async def orchestrate_deployment(
         update_deployment(client, coll, deployment_id, {"status": "selecting_gpu"})
         registry = get_gpu_registry(client, settings.firestore_collection_gpu_registry)
         tier_mapping = get_tier_mapping(client, settings.firestore_collection_gpu_tiers)
-        gpu_id, gpu_display = select_gpu(vram_gb, gpu_tier, registry=registry, tier_mapping=tier_mapping)
-        log_step("INFO", f"Selected GPU: {gpu_display}", gpu_id=gpu_id, provider=provider_name)
+        gpu_candidates = select_gpu_candidates(vram_gb, gpu_tier, registry=registry, tier_mapping=tier_mapping)
+        gpu_id, gpu_display = gpu_candidates[0]
+        log_step(
+            "INFO",
+            f"Selected GPU candidates count={len(gpu_candidates)}",
+            first_gpu=gpu_display,
+            provider=provider_name,
+        )
 
         # 3. Create Cloud Endpoint
         update_deployment(client, coll, deployment_id, {"status": "creating_endpoint"})
@@ -205,21 +225,39 @@ async def orchestrate_deployment(
         # Common data for all providers
         endpoint_name = doc.endpoint_name or f"visgate-{deployment_id}"
         locations = (doc.region or settings.runpod_default_locations).strip()
-        endpoint_data = await provider.create_endpoint(
-            name=endpoint_name,
-            gpu_id=gpu_id,
-            image=settings.docker_image,
-            env=env,
-            api_key=user_runpod_key,
-            # Runpod specific kwargs
-            template_id=settings.runpod_template_id,
-            workers_min=1,
-            workers_max=2,
-            idle_timeout=300,
-            scaler_value=2,
-            volume_in_gb=settings.runpod_volume_size_gb,
-            locations=locations,
-        )
+        endpoint_data = None
+        last_error: Exception | None = None
+        for candidate_id, candidate_display in gpu_candidates:
+            try:
+                endpoint_data = await provider.create_endpoint(
+                    name=endpoint_name,
+                    gpu_id=candidate_id,
+                    image=settings.docker_image,
+                    env=env,
+                    api_key=user_runpod_key,
+                    # Runpod specific kwargs
+                    template_id=settings.runpod_template_id,
+                    workers_min=1,
+                    workers_max=2,
+                    idle_timeout=300,
+                    scaler_value=2,
+                    volume_in_gb=settings.runpod_volume_size_gb,
+                    locations=locations,
+                )
+                gpu_id = candidate_id
+                gpu_display = candidate_display
+                break
+            except RunpodAPIError as exc:
+                last_error = exc
+                if is_capacity_error(exc.message):
+                    log_step("WARNING", f"GPU candidate unavailable: {candidate_display}", gpu_id=candidate_id)
+                    continue
+                raise
+
+        if endpoint_data is None:
+            if last_error:
+                raise last_error
+            raise RunpodAPIError("No suitable GPU candidate endpoint could be created")
         
         endpoint_id = endpoint_data["id"]
         endpoint_url = endpoint_data["url"]

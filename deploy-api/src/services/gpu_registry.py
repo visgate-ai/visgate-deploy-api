@@ -68,6 +68,39 @@ def select_gpu_id_for_vram(
     return None
 
 
+def select_gpu_candidates_for_vram(
+    vram_gb: int,
+    gpu_tier: Optional[str] = None,
+    registry: Optional[list[GPUSpec]] = None,
+    tier_mapping: Optional[dict[str, list[str]]] = None,
+) -> list[str]:
+    """Return candidate GPU IDs sorted by lowest cost that satisfy VRAM and optional tier."""
+    reg = registry if registry else DEFAULT_GPU_REGISTRY
+    mapping = tier_mapping if tier_mapping else DEFAULT_TIER_MAPPING
+
+    tier_candidates: list[str] = []
+    if gpu_tier:
+        normalized = gpu_tier.strip().upper()
+        tier_candidates = mapping.get(normalized, [])
+
+    sorted_registry = sorted(reg, key=lambda x: (x.get("cost_index", 5), x.get("vram", 0)))
+    result: list[str] = []
+    for gpu in sorted_registry:
+        if gpu.get("vram", 0) < vram_gb:
+            continue
+        gpu_id = gpu["id"]
+        if tier_candidates and gpu_id not in tier_candidates:
+            continue
+        result.append(gpu_id)
+
+    # If strict tier filtering produced no match, gracefully fallback to global candidates.
+    if not result and tier_candidates:
+        for gpu in sorted_registry:
+            if gpu.get("vram", 0) >= vram_gb:
+                result.append(gpu["id"])
+    return result
+
+
 def get_runpod_gpu_ids(gpu_tier: Optional[str]) -> list[str]:
     """Return GPU IDs for a tier (used by tests and compatibility checks)."""
     if not gpu_tier:

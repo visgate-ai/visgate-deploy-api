@@ -132,6 +132,16 @@ Recent real runs:
 | `dep_2026_416968b0` | `unknown` | 72.12s | 8.89s | - | - |
 | `dep_2026_24644278` | `unknown` | 37.61s | 7.55s | - | - |
 
+Cache-scope and capacity test snapshot (prod):
+
+| Scope | Deploy status | Deploy duration | Inference | Root cause / note |
+|---|---|---:|---:|---|
+| `off` | `timeout` | 1203.27s | - | Capacity / queue pressure during provisioning (`dep_2026_31b35de1`) |
+| `shared` | `http_400` | - | - | Service config missing `S3_MODEL_URL` |
+| `private` | `skipped` | - | - | Missing user S3 credentials in runtime env |
+
+Optimization now in code: GPU provisioning uses cost-ordered multi-candidate fallback (model VRAM + tier compatible) and retries on capacity-style Runpod API errors, so requests can move to the next suitable free GPU automatically.
+
 ## Cleanup Helpers
 
 - `python3 scripts/cleanup_runpod.py` - deletes `visgate-*` endpoints from your Runpod account
