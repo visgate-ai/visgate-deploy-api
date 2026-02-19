@@ -240,6 +240,7 @@ async def orchestrate_deployment(
                     workers_min=settings.runpod_workers_min,
                     workers_max=settings.runpod_workers_max,
                     idle_timeout=settings.runpod_idle_timeout_seconds,
+                    scaler_type=settings.runpod_scaler_type,
                     scaler_value=settings.runpod_scaler_value,
                     volume_in_gb=settings.runpod_volume_size_gb,
                     locations=locations,

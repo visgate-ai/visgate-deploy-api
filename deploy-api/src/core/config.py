@@ -79,28 +79,44 @@ class Settings(BaseSettings):
         description="Default Runpod locations (comma-separated)",
     )
     runpod_workers_min: int = Field(
-        default=1,
+        default=0,
         ge=0,
         le=10,
-        description="Minimum warm workers per endpoint (0 = always cold start, 1 = keep one warm)",
+        description=(
+            "Minimum warm workers per endpoint. "
+            "0 = no idle cost (cold start on each job, ~40-60s for large models). "
+            "1 = one always-warm worker (~$0.35-0.80/hr idle cost per deployment). "
+            "Use 1 only when sub-second response latency is required."
+        ),
     )
     runpod_workers_max: int = Field(
-        default=2,
+        default=3,
         ge=1,
         le=20,
         description="Maximum concurrent workers per endpoint",
     )
     runpod_idle_timeout_seconds: int = Field(
-        default=300,
-        ge=60,
+        default=120,
+        ge=30,
         le=3600,
-        description="Seconds a worker stays alive after its last job (cost vs cold-start trade-off)",
+        description=(
+            "Seconds a worker stays alive after its last job. "
+            "120s is a good balance: absorbs burst traffic without burning idle GPU hours. "
+            "Lower = cheaper but more cold starts; higher = faster burst but more idle cost."
+        ),
+    )
+    runpod_scaler_type: str = Field(
+        default="QUEUE_DELAY",
+        description="RunPod autoscaler type: QUEUE_DELAY (scale on queue wait) or REQUEST_COUNT",
     )
     runpod_scaler_value: int = Field(
-        default=2,
+        default=1,
         ge=1,
         le=60,
-        description="QUEUE_DELAY seconds before RunPod starts a new worker for burst traffic",
+        description=(
+            "QUEUE_DELAY seconds before RunPod starts a new worker. "
+            "1 = scale out immediately when a job waits 1s (lower latency, slightly more workers)."
+        ),
     )
 
     # Webhook

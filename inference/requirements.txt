@@ -8,5 +8,8 @@ transformers>=4.36.0
 accelerate>=0.25.0
 safetensors>=0.4.0
 
+# Fast HF Hub downloads (C extension, ~5x faster than requests)
+hf_transfer>=0.1.4
+
 # Image
 Pillow>=10.0.0
