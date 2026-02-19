@@ -21,9 +21,6 @@ ENV_LOCAL = os.path.join(REPO_ROOT, ".env.local")
 
 # Our GCP API (the only entry point)
 API_BASE = os.environ.get("VISGATE_API_URL", "https://visgate-deploy-api-93820292919.europe-west1.run.app")
-# Bearer token (API accepts any valid key from Firestore)
-API_BEARER = os.environ.get("VISGATE_API_BEARER", "visgate")
-
 # Default model (HF model ID or model_name) - sdxl-turbo: smaller, faster
 DEFAULT_HF_MODEL = os.environ.get("HF_MODEL", "stabilityai/sdxl-turbo")
 
@@ -56,7 +53,7 @@ def create_webhook_url():
     return f"https://webhook.site/{uuid}", uuid
 
 
-def api_post(path, body):
+def api_post(path, body, runpod_key: str):
     """POST to our GCP API."""
     url = f"{API_BASE.rstrip('/')}{path}"
     data = json.dumps(body).encode()
@@ -65,7 +62,8 @@ def api_post(path, body):
         data=data,
         headers={
             "Content-Type": "application/json",
-            "Authorization": f"Bearer {API_BEARER}",
+            "Authorization": f"Bearer {runpod_key}",
+            "X-Runpod-Api-Key": runpod_key,
             "User-Agent": "Visgate-Deploy-API/1.0",
         },
         method="POST",
@@ -74,12 +72,16 @@ def api_post(path, body):
         return json.loads(r.read().decode())
 
 
-def api_get(path):
+def api_get(path, runpod_key: str):
     """GET from our GCP API."""
     url = f"{API_BASE.rstrip('/')}{path}"
     req = urllib.request.Request(
         url,
-        headers={"Authorization": f"Bearer {API_BEARER}", "User-Agent": "Visgate-Deploy-API/1.0"},
+        headers={
+            "Authorization": f"Bearer {runpod_key}",
+            "X-Runpod-Api-Key": runpod_key,
+            "User-Agent": "Visgate-Deploy-API/1.0",
+        },
         method="GET",
     )
     with urllib.request.urlopen(req, timeout=15) as r:
@@ -112,7 +114,6 @@ def main():
     hf_model = os.environ.get("HF_MODEL", DEFAULT_HF_MODEL)
     body = {
         "hf_model_id": hf_model,
-        "user_runpod_key": runpod_key,
         "user_webhook_url": webhook_url,
     }
     gpu_tier = os.environ.get("GPU_TIER")
@@ -123,7 +124,7 @@ def main():
 
     print("Sending to GCP API (Inference Orchestrator)...")
     try:
-        resp = api_post("/v1/deployments", body)
+        resp = api_post("/v1/deployments", body, runpod_key)
     except urllib.error.HTTPError as e:
         print("API Error:", e.code, e.read().decode()[:500], file=sys.stderr)
         sys.exit(1)
@@ -162,7 +163,7 @@ def main():
 
         # Fallback: poll status from API
         try:
-            doc = api_get(f"/v1/deployments/{deployment_id}")
+            doc = api_get(f"/v1/deployments/{deployment_id}", runpod_key)
             status = doc.get("status")
             if status != last_status:
                 print("  status:", status)

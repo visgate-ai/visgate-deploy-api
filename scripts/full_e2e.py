@@ -6,29 +6,29 @@ import requests
 import base64
 
 API_BASE = os.environ.get("API_BASE", "https://visgate-deploy-api-wxup7pxrsa-uc.a.run.app")
-BEARER = "visgate"
 MODEL = "stabilityai/sd-turbo"
 WEBHOOK_URL = os.environ.get("WEBHOOK_URL", "https://httpbin.org/post")
+MAX_DEPLOY_WAIT_SECONDS = int(os.environ.get("MAX_DEPLOY_WAIT_SECONDS", "1800"))
 
 def main():
     print(f"--- Starting Full E2E Flow ---")
+    runpod_key = os.environ.get("RUNPOD")
+    if not runpod_key:
+        print("Error: RUNPOD environment variable not set.")
+        sys.exit(1)
     
     # 1. Trigger Deployment
     deploy_url = f"{API_BASE}/v1/deployments"
     payload = {
         "hf_model_id": MODEL,
         "gpu_tier": "A10", # AMPERE_24
-        "user_runpod_key": os.environ.get("RUNPOD"),
         "hf_token": os.environ.get("HF"),
         "user_webhook_url": WEBHOOK_URL
     }
-    
-    if not payload["user_runpod_key"]:
-        print("Error: RUNPOD environment variable not set.")
-        sys.exit(1)
 
     print(f"Triggering deployment for {MODEL}...")
-    r = requests.post(deploy_url, json=payload, headers={"Authorization": f"Bearer {BEARER}"})
+    headers = {"Authorization": f"Bearer {runpod_key}", "X-Runpod-Api-Key": runpod_key}
+    r = requests.post(deploy_url, json=payload, headers=headers)
     if r.status_code >= 400:
         print(f"Failed to trigger: {r.text}")
         sys.exit(1)
@@ -47,9 +47,13 @@ def main():
     
     print("Waiting for endpoint to be ready (this can take 2-5 mins)...")
     start_time = time.time()
+    deadline = start_time + MAX_DEPLOY_WAIT_SECONDS
     while not ready:
+        if time.time() > deadline:
+            print(f"Timed out after {MAX_DEPLOY_WAIT_SECONDS}s waiting for ready")
+            sys.exit(1)
         elapsed = time.time() - start_time
-        r = requests.get(status_url, headers={"Authorization": f"Bearer {BEARER}"})
+        r = requests.get(status_url, headers=headers)
         if r.status_code == 200:
             data = r.json()
             status = data.get("status")
@@ -80,7 +84,7 @@ def main():
         }
     }
     
-    headers = {"Authorization": f"Bearer {payload['user_runpod_key']}"}
+    headers = {"Authorization": f"Bearer {runpod_key}"}
     
     # Poll for inference result if queued
     inference_done = False

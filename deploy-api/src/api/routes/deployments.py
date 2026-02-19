@@ -123,6 +123,10 @@ def _build_s3_model_url(base_url: str, path_suffix: str) -> str:
     return f"{base_url.rstrip('/')}/{path_suffix.strip('/')}"
 
 
+def _parse_csv_set(value: str) -> set[str]:
+    return {item.strip() for item in (value or "").split(",") if item.strip()}
+
+
 def _resolve_hf_model_id(body: DeploymentCreate) -> str:
     """Resolve to HF model ID: either hf_model_id or get_hf_name(model_name, provider)."""
     if body.hf_model_id:
@@ -179,14 +183,34 @@ async def create_deployment(
     if cache_scope not in {"off", "shared", "private"}:
         raise InvalidDeploymentRequestError("cache_scope must be one of: off, shared, private")
 
+    private_fields_present = any(
+        [
+            body.user_s3_url,
+            body.user_aws_access_key_id,
+            body.user_aws_secret_access_key,
+            body.user_aws_endpoint_url,
+        ],
+    )
+    if cache_scope != "private" and private_fields_present:
+        raise InvalidDeploymentRequestError(
+            "user_s3_url and user_aws_* fields require cache_scope=private",
+        )
+
     private_s3_url = None
     private_access_key = None
     private_secret_key = None
     private_endpoint = None
 
     if cache_scope == "shared":
+        if not settings.shared_cache_enabled:
+            raise InvalidDeploymentRequestError("shared cache is disabled on this service")
         if not settings.s3_model_url:
             raise InvalidDeploymentRequestError("shared cache requires S3_MODEL_URL configured on service")
+        allowlisted_models = _parse_csv_set(settings.shared_cache_allowed_models)
+        if settings.shared_cache_reject_unlisted and allowlisted_models and hf_model_id not in allowlisted_models:
+            raise InvalidDeploymentRequestError(
+                "shared cache supports only allowlisted popular models; use cache_scope=off or private",
+            )
     if cache_scope == "private":
         if not body.user_s3_url:
             raise InvalidDeploymentRequestError("private cache requires user_s3_url")

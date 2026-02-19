@@ -80,3 +80,48 @@ def test_root(client: TestClient) -> None:
     resp = client.get("/")
     assert resp.status_code == 200
     assert "visgate-deploy-api" in resp.json().get("service", "")
+
+
+def test_private_fields_require_private_scope(
+    client: TestClient,
+    auth_headers: dict,
+    deployment_create_payload: dict,
+) -> None:
+    """Private S3 fields must not be accepted unless cache_scope=private."""
+    payload = {
+        **deployment_create_payload,
+        "cache_scope": "off",
+        "user_s3_url": "s3://example/models",
+    }
+    resp = client.post("/v1/deployments", json=payload, headers=auth_headers)
+    assert resp.status_code == 400
+    assert "cache_scope=private" in resp.json()["message"]
+
+
+@patch("src.api.routes.deployments.enqueue_orchestration_task", new_callable=AsyncMock)
+def test_shared_cache_rejects_unlisted_model(
+    mock_enqueue,
+    client: TestClient,
+    auth_headers: dict,
+    deployment_create_payload: dict,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Shared cache should reject models outside allowlist when strict mode is enabled."""
+    monkeypatch.setenv("S3_MODEL_URL", "s3://platform-cache/models")
+    monkeypatch.setenv("SHARED_CACHE_ALLOWED_MODELS", "stabilityai/sd-turbo")
+    monkeypatch.setenv("SHARED_CACHE_REJECT_UNLISTED", "true")
+
+    from src.core.config import get_settings
+
+    get_settings.cache_clear()
+    payload = {
+        **deployment_create_payload,
+        "hf_model_id": "black-forest-labs/FLUX.1-schnell",
+        "cache_scope": "shared",
+    }
+    resp = client.post("/v1/deployments", json=payload, headers=auth_headers)
+    get_settings.cache_clear()
+
+    assert resp.status_code == 400
+    assert "allowlisted popular models" in resp.json()["message"]
+    mock_enqueue.assert_not_called()

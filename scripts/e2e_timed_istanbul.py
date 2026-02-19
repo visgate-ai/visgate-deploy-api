@@ -5,18 +5,15 @@ Measures:
   T1: Deploy request -> Pod ready (seconds)
   T2: Inference request -> Response received (seconds)
   Total: T1 + T2
-
-Local dev: When webhook can't reach localhost, use --dev-fallback to
-auto-detect Runpod endpoint and mark Firestore ready.
 """
 import os
 import sys
 import time
 import requests
 import base64
+from typing import Any
 
 API_BASE = os.environ.get("API_BASE", "http://localhost:8000")
-BEARER = os.environ.get("BEARER", "visgate")
 # SD-Turbo: fastest model, 2 steps, good quality
 MODEL = "stabilityai/sd-turbo"
 GPU_TIER = "A10"  # AMPERE_24 - optimal cost/speed for SD
@@ -24,50 +21,20 @@ ISTANBUL_PROMPT = (
     "A beautiful panoramic view of Istanbul with the Bosphorus strait, "
     "Hagia Sophia and minarets, golden hour, photorealistic, 4k"
 )
-DEV_FALLBACK_WAIT = 120  # seconds before trying Runpod+Firestore bypass
 WEBHOOK_URL = os.environ.get("WEBHOOK_URL", "https://httpbin.org/post")
+MAX_DEPLOY_WAIT_SECONDS = int(os.environ.get("MAX_DEPLOY_WAIT_SECONDS", "1800"))
 
 
-def _runpod_find_endpoint(runpod_key: str, deploy_id: str) -> str | None:
-    """Query Runpod for endpoint named visgate-{deploy_id}. Return endpoint id or None."""
-    url = "https://api.runpod.io/graphql"
-    query = 'query { myself { endpoints { id name } } }'
-    r = requests.post(url, params={"api_key": runpod_key}, json={"query": query}, timeout=30)
-    if r.status_code != 200:
-        return None
-    data = r.json()
-    endpoints = data.get("data", {}).get("myself", {}).get("endpoints", []) or []
-    name = f"visgate-{deploy_id}"
-    for ep in endpoints:
-        if ep.get("name") == name:
-            return ep.get("id")
-    return None
-
-
-def _firestore_mark_ready(deploy_id: str, endpoint_id: str, project: str, collection: str) -> bool:
-    """Update Firestore deployment doc to ready."""
-    try:
-        from google.cloud import firestore
-        client = firestore.Client(project=project)
-        endpoint_url = f"https://api.runpod.ai/v2/{endpoint_id}"
-        client.collection(collection).document(deploy_id).update({
-            "status": "ready",
-            "endpoint_url": endpoint_url,
-            "runpod_endpoint_id": endpoint_id,
-            "ready_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-        })
-        return True
-    except Exception as e:
-        print(f"    [dev-fallback] Firestore update failed: {e}")
-        return False
+def _api_headers(runpod_key: str) -> dict[str, str]:
+    return {
+        "Authorization": f"Bearer {runpod_key}",
+        "X-Runpod-Api-Key": runpod_key,
+    }
 
 
 def main():
-    dev_fallback = "--dev-fallback" in sys.argv
     print("=" * 60)
     print("E2E: Istanbul Image - Timed Deployment + Inference")
-    if dev_fallback:
-        print("(dev-fallback enabled: will bypass webhook if stuck)")
     print("=" * 60)
 
     runpod_key = os.environ.get("RUNPOD")
@@ -76,18 +43,14 @@ def main():
         print("Error: RUNPOD env var required")
         sys.exit(1)
 
-    gcp_project = os.environ.get("GCP_PROJECT_ID", "visgate")
-    firestore_coll = os.environ.get("FIRESTORE_COLLECTION_DEPLOYMENTS", "visgate_deploy_api_deployments")
-
     payload = {
         "hf_model_id": MODEL,
         "gpu_tier": GPU_TIER,
-        "user_runpod_key": runpod_key,
         "hf_token": hf_token,
         "user_webhook_url": WEBHOOK_URL,
     }
 
-    headers = {"Authorization": f"Bearer {BEARER}"}
+    headers = _api_headers(runpod_key)
 
     # --- Phase 1: Deploy ---
     print("\n[1] Triggering deployment...")
@@ -112,8 +75,11 @@ def main():
     print("\n[2] Waiting for endpoint ready (poll every 10s)...")
     status_url = f"{API_BASE}/v1/deployments/{deploy_id}"
     endpoint_url = None
-    dev_fallback_attempted = False
+    deploy_deadline = time.perf_counter() + MAX_DEPLOY_WAIT_SECONDS
     while True:
+        if time.perf_counter() > deploy_deadline:
+            print(f"    Timeout waiting for ready after {MAX_DEPLOY_WAIT_SECONDS}s")
+            sys.exit(1)
         r = requests.get(status_url, headers=headers, timeout=30)
         if r.status_code != 200:
             print(f"    Poll error: {r.text}")
@@ -129,18 +95,6 @@ def main():
         if st == "failed":
             print(f"    Failed: {d.get('error', 'unknown')}")
             sys.exit(1)
-        # Dev fallback: if stuck at creating_endpoint, detect Runpod endpoint and mark Firestore
-        if dev_fallback and st == "creating_endpoint" and elapsed >= DEV_FALLBACK_WAIT and not dev_fallback_attempted:
-            dev_fallback_attempted = True
-            print(f"    [dev-fallback] Stuck >{DEV_FALLBACK_WAIT}s, checking Runpod...")
-            ep_id = _runpod_find_endpoint(runpod_key, deploy_id)
-            if ep_id:
-                print(f"    [dev-fallback] Found endpoint {ep_id}, marking Firestore ready")
-                if _firestore_mark_ready(deploy_id, ep_id, gcp_project, firestore_coll):
-                    endpoint_url = f"https://api.runpod.ai/v2/{ep_id}"
-                    break
-            else:
-                print("    [dev-fallback] Endpoint not found yet")
         time.sleep(10)
 
     t_deploy_end = time.perf_counter()
@@ -220,6 +174,22 @@ def main():
     print(f"  Total:                              {total_sec} s")
     print("=" * 60)
     print("SUCCESS")
+
+    timing_summary: dict[str, Any] = {
+        "deployment_id": deploy_id,
+        "model": MODEL,
+        "gpu_tier": GPU_TIER,
+        "t_deploy_seconds": t_deploy_sec,
+        "t_inference_seconds": t_inference_sec,
+        "t_total_seconds": total_sec,
+        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+    }
+    out_json = os.path.join(os.getcwd(), "e2e_timing_summary.json")
+    with open(out_json, "w", encoding="utf-8") as f:
+        import json
+
+        json.dump(timing_summary, f, ensure_ascii=False, indent=2)
+    print(f"Timing summary saved: {out_json}")
 
 
 if __name__ == "__main__":

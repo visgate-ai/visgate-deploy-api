@@ -101,6 +101,24 @@ class Settings(BaseSettings):
     aws_secret_access_key: str = Field(default="", description="AWS Secret Access Key")
     aws_endpoint_url: str = Field(default="", description="AWS Endpoint URL (for R2/Minio)")
     s3_model_url: str = Field(default="", description="Base S3 URL for model cache")
+    shared_cache_enabled: bool = Field(
+        default=True,
+        description="Enable platform shared cache mode",
+    )
+    shared_cache_allowed_models: str = Field(
+        default=(
+            "stabilityai/sd-turbo,"
+            "black-forest-labs/FLUX.1-schnell,"
+            "stabilityai/stable-diffusion-xl-base-1.0,"
+            "stabilityai/sdxl-turbo,"
+            "stabilityai/stable-diffusion-3.5-large"
+        ),
+        description="Comma-separated model allowlist for shared cache mode",
+    )
+    shared_cache_reject_unlisted: bool = Field(
+        default=True,
+        description="Reject shared cache requests for models outside shared_cache_allowed_models",
+    )
 
     # API
     rate_limit_requests_per_minute: int = Field(default=100, ge=1, le=1000)
