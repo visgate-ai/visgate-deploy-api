@@ -43,7 +43,7 @@ for f in "${REPO_ROOT}/deploy-api/.env" "${REPO_ROOT}/.env.local"; do
 done
 
 CLOUD_TASKS_QUEUE_PATH="projects/${PROJECT_ID}/locations/${REGION}/queues/visgate-orchestrator-queue"
-INTERNAL_WEBHOOK_BASE_URL_VALUE="${INTERNAL_WEBHOOK_BASE_URL:-https://visgate-deploy-api-wxup7pxrsa-uc.a.run.app}"
+INTERNAL_WEBHOOK_BASE_URL_VALUE="${INTERNAL_WEBHOOK_BASE_URL:-}"  # Set INTERNAL_WEBHOOK_BASE_URL to your Cloud Run service URL
 
 gcloud run deploy "${SERVICE_NAME}" \
   --image "${IMAGE}" \

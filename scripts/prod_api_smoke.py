@@ -17,7 +17,12 @@ from dataclasses import dataclass, asdict
 
 import requests
 
-API_BASE = os.environ.get("API_BASE", "https://visgate-deploy-api-wxup7pxrsa-uc.a.run.app").rstrip("/")
+# Set API_BASE to your deployed service URL.
+# Example: API_BASE=https://YOUR_SERVICE-hash-uc.a.run.app python scripts/prod_api_smoke.py
+API_BASE = os.environ.get("API_BASE", "").rstrip("/")
+if not API_BASE:
+    print("Set API_BASE env var to your deployed service URL.", file=sys.stderr)
+    sys.exit(1)
 RUNPOD_KEY = os.environ.get("RUNPOD")
 HF_TOKEN = os.environ.get("HF")
 MODEL = os.environ.get("HF_MODEL", "stabilityai/sd-turbo")

@@ -19,6 +19,7 @@ build/
 # IDE
 .idea/
 .vscode/
+.cursor/
 *.swp
 *.swo
 
@@ -28,6 +29,10 @@ build/
 htmlcov/
 .tox/
 
+# Local test artifacts
+e2e_timing_summary.json
+*.png
+istanbul_*.png
 # OS
 .DS_Store
 Thumbs.db

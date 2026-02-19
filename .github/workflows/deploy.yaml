@@ -56,7 +56,7 @@ jobs:
             FIRESTORE_COLLECTION_API_KEYS=visgate_deploy_api_api_keys
             GCP_LOCATION=${{ env.REGION }}
             CLOUD_TASKS_QUEUE_PATH=projects/${{ env.PROJECT_ID }}/locations/${{ env.REGION }}/queues/visgate-orchestrator-queue
-            INTERNAL_WEBHOOK_BASE_URL=https://visgate-deploy-api-wxup7pxrsa-uc.a.run.app
+            INTERNAL_WEBHOOK_BASE_URL=${{ secrets.INTERNAL_WEBHOOK_BASE_URL }}
             DOCKER_IMAGE=uzunenes/inference:latest
             LOG_LEVEL=INFO
           secrets: |
