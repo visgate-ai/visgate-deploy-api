@@ -6,7 +6,7 @@ from typing import Any, Optional
 from src.core.errors import HuggingFaceModelNotFoundError
 from src.core.logging import structured_log
 from src.core.telemetry import span
-from src.models.model_specs_registry import get_model_specs, get_vram_gb
+from src.models.model_specs_registry import get_model_specs, get_min_gpu_memory_gb
 
 # Optional dependency
 try:
@@ -24,12 +24,14 @@ class ModelInfo:
     def __init__(
         self,
         model_id: str,
-        vram_gb: int,
+        min_gpu_memory_gb: int,
         exists: bool = True,
         raw: Optional[dict[str, Any]] = None,
     ) -> None:
         self.model_id = model_id
-        self.vram_gb = vram_gb
+        self.min_gpu_memory_gb = min_gpu_memory_gb
+        # backwards-compat alias
+        self.vram_gb = min_gpu_memory_gb
         self.exists = exists
         self.raw = raw or {}
 
@@ -44,10 +46,11 @@ async def validate_model(
     Uses registry for vram_gb; validates existence via HfApi.
     """
     with span("huggingface.validate_model", {"hf_model_id": model_id}):
-        vram_gb = get_vram_gb(model_id)
-        # Registry modelleri için HF API'yi atla (429 rate limit önleme)
+        # Fast path: registry hit (also skips HF rate-limit)
         if get_model_specs(model_id) is not None:
-            return ModelInfo(model_id=model_id, vram_gb=vram_gb, exists=True)
+            mem_gb = get_min_gpu_memory_gb(model_id)
+            return ModelInfo(model_id=model_id, min_gpu_memory_gb=mem_gb, exists=True)
+
         if not _HF_AVAILABLE or HfApi is None:
             structured_log(
                 "WARNING",
@@ -55,14 +58,31 @@ async def validate_model(
                 operation="model.validate",
                 metadata={"hf_model_id": model_id},
             )
-            return ModelInfo(model_id=model_id, vram_gb=vram_gb, exists=True)
+            mem_gb = get_min_gpu_memory_gb(model_id)
+            return ModelInfo(model_id=model_id, min_gpu_memory_gb=mem_gb, exists=True)
+
+        # For unknown models: fetch HF metadata to extract parameter count
+        _hf_params_millions: list[Optional[int]] = [None]
 
         def _check() -> None:
             api = HfApi(token=token)
             last_err = None
             for attempt in range(3):
                 try:
-                    api.model_info(model_id, timeout=timeout_seconds)
+                    info = api.model_info(model_id, timeout=timeout_seconds)
+                    # Try to extract parameter count from HF metadata
+                    try:
+                        safetensors = getattr(info, "safetensors", None)
+                        if safetensors and hasattr(safetensors, "total"):
+                            _hf_params_millions[0] = safetensors.total // 1_000_000
+                        elif hasattr(info, "cardData") and info.cardData:
+                            p = info.cardData.get("model-index", [{}])[0].get(
+                                "results", [{}]
+                            )[0].get("metrics", [{}])[0].get("value")
+                            if isinstance(p, (int, float)):
+                                _hf_params_millions[0] = int(p)
+                    except Exception:
+                        pass
                     return
                 except Exception as e:
                     last_err = e
@@ -98,4 +118,15 @@ async def validate_model(
                 message=f"Failed to validate model: {e}",
             )
 
-        return ModelInfo(model_id=model_id, vram_gb=vram_gb, exists=True)
+        mem_gb = get_min_gpu_memory_gb(model_id, hf_params_millions=_hf_params_millions[0])
+        structured_log(
+            "INFO",
+            "Unknown model VRAM estimated",
+            operation="model.validate",
+            metadata={
+                "hf_model_id": model_id,
+                "params_millions": _hf_params_millions[0],
+                "min_gpu_memory_gb": mem_gb,
+            },
+        )
+        return ModelInfo(model_id=model_id, min_gpu_memory_gb=mem_gb, exists=True)

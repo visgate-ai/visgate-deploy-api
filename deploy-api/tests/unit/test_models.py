@@ -3,7 +3,7 @@
 import pytest
 from pydantic import ValidationError
 
-from src.models.model_specs_registry import get_model_specs, get_vram_gb, MODEL_SPECS_REGISTRY
+from src.models.model_specs_registry import get_model_specs, get_vram_gb, get_min_gpu_memory_gb, MODEL_SPECS_REGISTRY
 from src.models.schemas import DeploymentCreate, DeploymentResponse202, LogEntrySchema
 from src.models.entities import DeploymentDoc, LogEntry
 
@@ -14,19 +14,23 @@ def test_model_specs_registry_has_seed_models() -> None:
 
 
 def test_get_vram_gb_known_model() -> None:
-    assert get_vram_gb("black-forest-labs/FLUX.1-schnell") == 12
-    assert get_vram_gb("stabilityai/sdxl-turbo") == 8
+    # Backward-compat alias must still work
+    assert get_vram_gb("black-forest-labs/FLUX.1-schnell") == get_min_gpu_memory_gb("black-forest-labs/FLUX.1-schnell")
+    assert get_vram_gb("stabilityai/sdxl-turbo") == get_min_gpu_memory_gb("stabilityai/sdxl-turbo")
 
 
 def test_get_vram_gb_unknown_defaults() -> None:
-    assert get_vram_gb("unknown/model") == 12
+    # Unknown models default to 16 GB (safe headroom)
+    assert get_vram_gb("unknown/model") == 16
 
 
 def test_get_model_specs() -> None:
     spec = get_model_specs("black-forest-labs/FLUX.1-schnell")
     assert spec is not None
-    assert spec["vram_gb"] == 12
-    assert "float16" in spec["supported_precisions"]
+    # New field name: gpu_memory_gb (= true minimum GPU memory needed)
+    assert "gpu_memory_gb" in spec
+    assert spec["gpu_memory_gb"] >= 16  # FLUX.1-schnell needs at least 16 GB
+    assert "tasks" in spec
 
 
 def test_deployment_create_valid() -> None:

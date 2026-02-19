@@ -9,14 +9,16 @@ class GPUSpec(TypedDict):
     cost_index: int  # Qualitative index: 1 (cheapest) to 10 (most expensive)
 
 # FAST FALLBACKS (Used if Firestore is unavailable or for local dev)
+# vram column = total GPU memory.  GPU selection algorithm picks the cheapest GPU
+# whose vram >= model's min_gpu_memory_gb so there is headroom for activations.
 DEFAULT_GPU_REGISTRY: list[GPUSpec] = [
-    {"id": "AMPERE_16", "display": "NVIDIA A16", "vram": 16, "cost_index": 1},
-    {"id": "AMPERE_24", "display": "NVIDIA A10 / A30", "vram": 24, "cost_index": 2},
-    {"id": "ADA_24", "display": "NVIDIA L40 / RTX 4090", "vram": 24, "cost_index": 3},
-    {"id": "AMPERE_48", "display": "NVIDIA A40", "vram": 48, "cost_index": 5},
-    {"id": "ADA_48_PRO", "display": "NVIDIA L40S", "vram": 48, "cost_index": 6},
-    {"id": "AMPERE_80", "display": "NVIDIA A100", "vram": 80, "cost_index": 8},
-    {"id": "ADA_80_PRO", "display": "NVIDIA H100", "vram": 80, "cost_index": 10},
+    {"id": "AMPERE_16", "display": "NVIDIA A16",          "vram": 16, "cost_index": 1},
+    {"id": "AMPERE_24", "display": "NVIDIA A10 / A30",    "vram": 24, "cost_index": 2},
+    {"id": "ADA_24",    "display": "NVIDIA L40 / RTX 4090","vram": 24, "cost_index": 3},
+    {"id": "AMPERE_48", "display": "NVIDIA A40",          "vram": 48, "cost_index": 5},
+    {"id": "ADA_48_PRO","display": "NVIDIA L40S",         "vram": 48, "cost_index": 6},
+    {"id": "AMPERE_80", "display": "NVIDIA A100",         "vram": 80, "cost_index": 8},
+    {"id": "ADA_80_PRO","display": "NVIDIA H100",         "vram": 80, "cost_index": 10},
 ]
 
 DEFAULT_TIER_MAPPING: dict[str, list[str]] = {

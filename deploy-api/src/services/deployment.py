@@ -166,9 +166,9 @@ async def orchestrate_deployment(
         log_step("INFO", "Validating Hugging Face model")
         with span("deployment.validate_hf", {"hf_model_id": hf_model_id}):
             model_info = await validate_model(hf_model_id, token=hf_token)
-        vram_gb = model_info.vram_gb
+        vram_gb = model_info.min_gpu_memory_gb
         update_deployment(client, coll, deployment_id, {"model_vram_gb": vram_gb})
-        log_step("INFO", "HF model validated", hf_model_id=hf_model_id, vram_gb=vram_gb)
+        log_step("INFO", "HF model validated", hf_model_id=hf_model_id, min_gpu_memory_gb=vram_gb)
 
         # 2. Select GPU
         update_deployment(client, coll, deployment_id, {"status": "selecting_gpu"})
