@@ -23,8 +23,19 @@ class SDXLPipeline(BasePipeline):
             token=self.token,
         )
         self._pipeline.to(self.device)
+        # Memory optimizations (best-effort)
+        for method in (
+            "enable_vae_slicing",
+            "enable_vae_tiling",
+            "enable_attention_slicing",
+        ):
+            try:
+                getattr(self._pipeline, method)()
+            except Exception:
+                pass
+        # xformers memory-efficient attention (faster if installed)
         try:
-            self._pipeline.enable_attention_slicing()
+            self._pipeline.enable_xformers_memory_efficient_attention()
         except Exception:
             pass
 

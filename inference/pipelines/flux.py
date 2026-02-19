@@ -17,16 +17,31 @@ class FluxPipeline(BasePipeline):
             from diffusers import FluxPipeline as DiffusersFluxPipeline
         except ImportError:
             from diffusers import AutoPipelineForText2Image as DiffusersFluxPipeline
+
+        # bfloat16 is native to Ampere/Ada; avoids float16 precision loss on flux
+        import torch
+        dtype = torch.bfloat16 if torch.cuda.is_available() else torch.float32
+
         self._pipeline = DiffusersFluxPipeline.from_pretrained(
             self.model_id,
-            torch_dtype=torch.float16,
+            torch_dtype=dtype,
             use_safetensors=True,
             token=self.token,
         )
         self._pipeline.to(self.device)
-        # Optional: enable memory optimizations
+        # Memory optimizations (best-effort; ignore if unsupported)
+        for method in (
+            "enable_vae_slicing",
+            "enable_vae_tiling",
+            "enable_attention_slicing",
+        ):
+            try:
+                getattr(self._pipeline, method)()
+            except Exception:
+                pass
+        # xformers memory-efficient attention (faster if installed)
         try:
-            self._pipeline.enable_attention_slicing()
+            self._pipeline.enable_xformers_memory_efficient_attention()
         except Exception:
             pass
 

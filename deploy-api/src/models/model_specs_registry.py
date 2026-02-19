@@ -92,8 +92,50 @@ MODEL_SPECS_REGISTRY: dict[str, dict[str, Any]] = {
 }
 
 
-# Rough parameter-count → minimum GPU memory table.
-# Used for unknown models when HF metadata provides parameter count.
+# dtype string → bytes per parameter
+# Covers all dtypes returned by huggingface_hub SafeTensorsInfo.parameters
+_BYTES_PER_PARAM: dict[str, float] = {
+    "BF16":    2,   "F16":  2, "F32":  4, "F64":  8,
+    "I64":     8,   "I32":  4, "I16":  2, "I8":   1,
+    "U8":      1,   "U16":  2, "U32":  4, "U64":  8,
+    "F8_E4M3": 1,  "F8_E5M2": 1,
+}
+
+# GPU tier snap table (GB) — we always round up to a real tier
+_GPU_TIERS: tuple[int, ...] = (6, 8, 10, 12, 16, 24, 28, 40, 48, 80)
+
+# Multiplier applied to raw weight bytes to estimate total VRAM needed.
+# Covers activations, KV-cache, framework buffers, CUDA context.
+# 1.35 is safe for diffusion models with attention slicing enabled.
+_ACTIVATION_MULTIPLIER = 1.35
+
+
+def _snap_to_gpu_tier(vram_gb: float) -> int:
+    """Round up to the nearest real GPU tier size."""
+    import math
+    for tier in _GPU_TIERS:
+        if tier >= math.ceil(vram_gb):
+            return tier
+    return _GPU_TIERS[-1]
+
+
+def _estimate_vram_from_weight_bytes(weight_bytes: int) -> int:
+    """
+    Estimate minimum GPU memory in GB from raw model weight bytes.
+
+    Formula::
+
+        weight_gb = weight_bytes / 1024³
+        min_vram  = snap_to_tier(weight_gb × 1.35)
+
+    Example: FLUX.1-schnell BF16 11.9 B params → 22.1 GB weight
+             → 22.1 × 1.35 = 29.8 → snapped to 40 GB tier.
+    """
+    weight_gb = weight_bytes / (1024 ** 3)
+    return _snap_to_gpu_tier(weight_gb * _ACTIVATION_MULTIPLIER)
+
+
+# Rough parameter-count → minimum GPU memory table (fallback when dtype unknown).
 _PARAM_TO_VRAM: list[tuple[int, int]] = [
     #  params (M)  min_vram_gb
     (500,         6),
@@ -107,7 +149,7 @@ _PARAM_TO_VRAM: list[tuple[int, int]] = [
 
 
 def _estimate_vram_from_params(params_millions: int) -> int:
-    """Return minimum GPU memory estimate given parameter count in millions."""
+    """Return minimum GPU memory estimate given parameter count in millions (no dtype info)."""
     for threshold, vram in _PARAM_TO_VRAM:
         if params_millions <= threshold:
             return vram
@@ -119,17 +161,25 @@ def get_model_specs(model_id: str) -> dict[str, Any] | None:
     return MODEL_SPECS_REGISTRY.get(model_id)
 
 
-def get_min_gpu_memory_gb(model_id: str, hf_params_millions: int | None = None) -> int:
+def get_min_gpu_memory_gb(
+    model_id: str,
+    hf_params_millions: int | None = None,
+    hf_weight_bytes: int | None = None,
+) -> int:
     """Return minimum GPU memory required for the model in GB.
 
     Priority:
-    1. Registry entry (most accurate)
-    2. Parameter-count estimate from HF metadata (if provided)
-    3. Conservative default: 16 GB (safe for most diffusion models)
+    1. Registry entry  — most accurate, hand-tuned per model
+    2. Byte-based estimate — ``hf_weight_bytes`` from ``safetensors.parameters``
+       gives true weight size per dtype → ``× 1.35`` headroom → tier snap
+    3. Param-count estimate — coarser fallback when dtype is unavailable
+    4. Conservative default: 16 GB
     """
     spec = get_model_specs(model_id)
     if spec:
         return int(spec.get("gpu_memory_gb", 16))
+    if hf_weight_bytes is not None and hf_weight_bytes > 0:
+        return _estimate_vram_from_weight_bytes(hf_weight_bytes)
     if hf_params_millions is not None:
         return _estimate_vram_from_params(hf_params_millions)
     return 16  # safer default than 12: avoids wasting a cold start on OOM

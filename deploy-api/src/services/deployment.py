@@ -237,10 +237,10 @@ async def orchestrate_deployment(
                     api_key=user_runpod_key,
                     # Runpod specific kwargs
                     template_id=settings.runpod_template_id,
-                    workers_min=1,
-                    workers_max=2,
-                    idle_timeout=300,
-                    scaler_value=2,
+                    workers_min=settings.runpod_workers_min,
+                    workers_max=settings.runpod_workers_max,
+                    idle_timeout=settings.runpod_idle_timeout_seconds,
+                    scaler_value=settings.runpod_scaler_value,
                     volume_in_gb=settings.runpod_volume_size_gb,
                     locations=locations,
                 )
@@ -285,7 +285,7 @@ async def orchestrate_deployment(
         # Fallback readiness monitor:
         # If worker webhook fails, probe Runpod endpoint directly and mark ready.
         monitor_timeout_seconds = 900
-        monitor_interval_seconds = 8
+        monitor_interval_seconds = 5  # 5s: faster webhook-fallback detection
         started_at = asyncio.get_running_loop().time()
         while True:
             latest = get_deployment(client, coll, deployment_id)

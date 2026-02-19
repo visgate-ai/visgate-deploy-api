@@ -6,7 +6,11 @@ from typing import Any, Optional
 from src.core.errors import HuggingFaceModelNotFoundError
 from src.core.logging import structured_log
 from src.core.telemetry import span
-from src.models.model_specs_registry import get_model_specs, get_min_gpu_memory_gb
+from src.models.model_specs_registry import (
+    _BYTES_PER_PARAM,
+    get_min_gpu_memory_gb,
+    get_model_specs,
+)
 
 # Optional dependency
 try:
@@ -61,8 +65,9 @@ async def validate_model(
             mem_gb = get_min_gpu_memory_gb(model_id)
             return ModelInfo(model_id=model_id, min_gpu_memory_gb=mem_gb, exists=True)
 
-        # For unknown models: fetch HF metadata to extract parameter count
-        _hf_params_millions: list[Optional[int]] = [None]
+        # For unknown models: fetch HF metadata to extract weight bytes (dtype-aware)
+        _hf_weight_bytes: list[int | None] = [None]
+        _hf_params_millions: list[int | None] = [None]
 
         def _check() -> None:
             api = HfApi(token=token)
@@ -70,17 +75,20 @@ async def validate_model(
             for attempt in range(3):
                 try:
                     info = api.model_info(model_id, timeout=timeout_seconds)
-                    # Try to extract parameter count from HF metadata
+                    # Primary: dtype-aware byte calculation from safetensors.parameters
+                    # safetensors.parameters = {"BF16": 11_900_069_376, "F32": 122_880, ...}
                     try:
-                        safetensors = getattr(info, "safetensors", None)
-                        if safetensors and hasattr(safetensors, "total"):
-                            _hf_params_millions[0] = safetensors.total // 1_000_000
-                        elif hasattr(info, "cardData") and info.cardData:
-                            p = info.cardData.get("model-index", [{}])[0].get(
-                                "results", [{}]
-                            )[0].get("metrics", [{}])[0].get("value")
-                            if isinstance(p, (int, float)):
-                                _hf_params_millions[0] = int(p)
+                        sf = getattr(info, "safetensors", None)
+                        if sf and hasattr(sf, "parameters") and sf.parameters:
+                            total_bytes = sum(
+                                int(count) * _BYTES_PER_PARAM.get(dtype, 4)
+                                for dtype, count in sf.parameters.items()
+                            )
+                            if total_bytes > 0:
+                                _hf_weight_bytes[0] = total_bytes
+                        # Fallback: raw param count (no dtype)
+                        if _hf_weight_bytes[0] is None and sf and hasattr(sf, "total") and sf.total:
+                            _hf_params_millions[0] = int(sf.total) // 1_000_000
                     except Exception:
                         pass
                     return
@@ -118,13 +126,18 @@ async def validate_model(
                 message=f"Failed to validate model: {e}",
             )
 
-        mem_gb = get_min_gpu_memory_gb(model_id, hf_params_millions=_hf_params_millions[0])
+        mem_gb = get_min_gpu_memory_gb(
+            model_id,
+            hf_weight_bytes=_hf_weight_bytes[0],
+            hf_params_millions=_hf_params_millions[0],
+        )
         structured_log(
             "INFO",
-            "Unknown model VRAM estimated",
+            "Unknown model VRAM estimated from HF metadata",
             operation="model.validate",
             metadata={
                 "hf_model_id": model_id,
+                "weight_bytes": _hf_weight_bytes[0],
                 "params_millions": _hf_params_millions[0],
                 "min_gpu_memory_gb": mem_gb,
             },

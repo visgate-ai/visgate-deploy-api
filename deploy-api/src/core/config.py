@@ -78,6 +78,30 @@ class Settings(BaseSettings):
         default="US",
         description="Default Runpod locations (comma-separated)",
     )
+    runpod_workers_min: int = Field(
+        default=1,
+        ge=0,
+        le=10,
+        description="Minimum warm workers per endpoint (0 = always cold start, 1 = keep one warm)",
+    )
+    runpod_workers_max: int = Field(
+        default=2,
+        ge=1,
+        le=20,
+        description="Maximum concurrent workers per endpoint",
+    )
+    runpod_idle_timeout_seconds: int = Field(
+        default=300,
+        ge=60,
+        le=3600,
+        description="Seconds a worker stays alive after its last job (cost vs cold-start trade-off)",
+    )
+    runpod_scaler_value: int = Field(
+        default=2,
+        ge=1,
+        le=60,
+        description="QUEUE_DELAY seconds before RunPod starts a new worker for burst traffic",
+    )
 
     # Webhook
     webhook_timeout_seconds: int = Field(default=10, ge=1, le=60)

@@ -26,13 +26,14 @@ def sync_from_s3(s3_url: str, local_path: str):
 
     # AWS credentials should be in environment variables
     # s5cmd cp s3://bucket/path/* local_path
-    concurrency = os.environ.get("S5CMD_CONCURRENCY", "10")
-    cmd = ["s5cmd", "--concurrency", concurrency]
+    concurrency = os.environ.get("S5CMD_CONCURRENCY", "50")  # default 50 for fast model download
+    part_size = os.environ.get("S5CMD_PART_SIZE_MB", "50")
+    cmd = ["s5cmd", "--numworkers", concurrency]
     endpoint_url = os.environ.get("AWS_ENDPOINT_URL")
     if endpoint_url:
         cmd.extend(["--endpoint-url", endpoint_url])
 
-    cmd.extend(["cp", f"{s3_url.rstrip('/')}/*", local_path])
+    cmd.extend(["cp", "--part-size", part_size, f"{s3_url.rstrip('/')}/*", local_path])
     try:
         subprocess.run(cmd, check=True)
         print("✅ S3 Sync complete.")
