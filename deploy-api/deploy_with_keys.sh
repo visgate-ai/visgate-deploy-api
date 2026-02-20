@@ -57,7 +57,7 @@ gcloud run deploy "${SERVICE_NAME}" \
   --update-env-vars "CLOUD_TASKS_QUEUE_PATH=${CLOUD_TASKS_QUEUE_PATH}" \
   --update-env-vars "GCP_LOCATION=${REGION}" \
   --update-env-vars "LOG_LEVEL=INFO" \
-  --update-env-vars "DOCKER_IMAGE=visgate-ai/inference:latest" \
+  --update-env-vars "DOCKER_IMAGE=visgateai/inference:latest" \
   --update-env-vars "INTERNAL_WEBHOOK_BASE_URL=${INTERNAL_WEBHOOK_BASE_URL_VALUE}" \
   --port 8080 \
   --project "${PROJECT_ID}"

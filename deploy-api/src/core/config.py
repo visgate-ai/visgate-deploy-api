@@ -61,7 +61,7 @@ class Settings(BaseSettings):
 
     # Runpod
     docker_image: str = Field(
-        default="visgate-ai/inference:latest",
+        default="visgateai/inference:latest",
         min_length=1,
         description="Docker image for Runpod inference workers",
     )

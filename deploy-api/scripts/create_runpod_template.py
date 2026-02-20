@@ -27,7 +27,7 @@ from src.services.runpod import create_serverless_template
 
 
 TEMPLATE_NAME = "visgate-inference"
-DEFAULT_IMAGE = os.environ.get("DOCKER_IMAGE") or os.environ.get("IMAGE") or "visgate-ai/inference:latest"
+DEFAULT_IMAGE = os.environ.get("DOCKER_IMAGE") or os.environ.get("IMAGE") or "visgateai/inference:latest"
 
 
 async def main() -> None:

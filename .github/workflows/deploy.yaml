@@ -57,7 +57,7 @@ jobs:
             GCP_LOCATION=${{ env.REGION }}
             CLOUD_TASKS_QUEUE_PATH=projects/${{ env.PROJECT_ID }}/locations/${{ env.REGION }}/queues/visgate-orchestrator-queue
             INTERNAL_WEBHOOK_BASE_URL=${{ secrets.INTERNAL_WEBHOOK_BASE_URL }}
-            DOCKER_IMAGE=visgate-ai/inference:latest
+            DOCKER_IMAGE=visgateai/inference:latest
             LOG_LEVEL=INFO
           secrets: |
             RUNPOD_TEMPLATE_ID=RUNPOD_TEMPLATE_ID:latest
