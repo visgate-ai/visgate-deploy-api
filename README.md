@@ -1,6 +1,9 @@
 # Visgate Deploy API
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Deploy API CI](https://github.com/visgate-ai/visgate-deploy-api/actions/workflows/deploy.yaml/badge.svg)](https://github.com/visgate-ai/visgate-deploy-api/actions/workflows/deploy.yaml)
+[![Inference Docker](https://github.com/visgate-ai/visgate-deploy-api/actions/workflows/inference.yaml/badge.svg)](https://github.com/visgate-ai/visgate-deploy-api/actions/workflows/inference.yaml)
+[![Docker Hub](https://img.shields.io/docker/v/visgateai/inference?label=visgateai%2Finference)](https://hub.docker.com/r/visgateai/inference)
 
 An open-source orchestration API that deploys Hugging Face diffusion models to [RunPod](https://runpod.io) serverless endpoints — validated, GPU-selected, cached, and webhook-notified.
 
@@ -171,7 +174,7 @@ Set `RUNPOD_WORKERS_MIN=1` for production deployments where sub-second startup l
 Key environment variables:
 
 ```bash
-# Required
+# Required (leave empty for local dev — in-memory storage used automatically)
 GCP_PROJECT_ID=your-project
 
 # RunPod
@@ -227,35 +230,39 @@ scripts/             # CLI utilities
 ```bash
 cd deploy-api
 pip install -r requirements.txt
-GCP_PROJECT_ID=local python -m pytest tests/ -q   # 39 tests
+python -m pytest tests/ -q   # 39 tests, no cloud credentials needed
 ```
 
-The test suite mocks Firestore and RunPod; no cloud credentials needed for unit tests.
+The test suite mocks Firestore and RunPod. For local API development leave `GCP_PROJECT_ID` empty — in-memory storage activates automatically.
 
 ## Inference Worker Setup
 
 1. Build and push the inference image:
    ```bash
    cd inference
-   docker build -t your-org/inference:latest .
-   docker push your-org/inference:latest
+   docker build -t visgateai/inference:latest .
+   docker push visgateai/inference:latest
    ```
+   Or fork this repo — GitHub Actions builds and pushes `visgateai/inference:latest` automatically on every push to `inference/`.
 
 2. Create a RunPod Serverless Template pointing to that image (or use the helper script):
    ```bash
-   python deploy-api/scripts/create_runpod_template.py
+   RUNPOD_API_KEY=xxx python deploy-api/scripts/create_runpod_template.py
    ```
 
 3. Set `RUNPOD_TEMPLATE_ID` in your deploy-api environment.
 
 ## Contributing
 
-Pull requests welcome. Areas where contributions are most useful:
+Pull requests welcome — see [CONTRIBUTING.md](CONTRIBUTING.md) for setup and guidelines.
+
+Areas where contributions are most useful:
 
 - Additional pipeline types in `inference/pipelines/` (ControlNet, img2img, video models)
 - More models in `deploy-api/src/models/model_specs_registry.py`
-- Vast.ai or other GPU provider implementations in `deploy-api/src/services/`
+- Alternative GPU provider implementations in `deploy-api/src/services/` (Vast.ai, Lambda, etc.)
 - Quantization support (GGUF, GPTQ) in the inference worker
+- Multi-cloud storage backends (GCS, Azure Blob)
 
 ## License
 

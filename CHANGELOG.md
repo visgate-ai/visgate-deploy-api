@@ -1,6 +1,25 @@
 # Changelog
 
-## [0.4.0] - 2026-02-19 — GPU selection fix + RunPod cost optimizations
+## [0.5.0] - 2026-02-20 — Local dev mode + OSS release
+
+### Added
+- **Local dev without GCP:** `GCP_PROJECT_ID` is now optional (default `""`). When empty, in-memory storage activates automatically — no Firestore, no GCP account needed.
+- `USE_MEMORY_REPO=true` env var to explicitly force in-memory mode even when `GCP_PROJECT_ID` is set.
+- `effective_use_memory_repo` property on `Settings` for combined flag logic.
+- `memory_repo.py` now has full API parity with `firestore_repo.py`: added `get_gpu_registry()`, `get_tier_mapping()`, `find_reusable_deployment()`.
+- `_get_repo()` selector in `deployment.py` — switches between Firestore and in-memory at runtime without code changes.
+- `.env.example` updated with annotated explanation for every env var.
+- `CONTRIBUTING.md` + GitHub issue templates.
+
+### Changed
+- Docker image default: `uzunenes/inference:latest` → `visgateai/inference:latest` (all references updated across 5 files).
+- GitHub Actions (`inference.yaml`, `deploy.yaml`) updated to `visgateai` Docker Hub namespace.
+- `get_api_key()` in `memory_repo.py`: no longer hardcodes `"test-key"` — accepts any non-empty key when `ORCHESTRATOR_API_KEY` is not set, or validates against it when set.
+
+### Removed
+- `vastai.py` — was an uninstantiable stub (missing `list_endpoints` ABC implementation); removed entirely.
+
+
 
 ### Fixed
 - **GPU selection bug:** `min_gpu_memory` field in old registry was silently ignored; only `vram_gb` was used for GPU selection. FLUX.1-dev was selecting AMPERE_24 (24 GB) which OOM'd at runtime (model needs 28 GB minimum).
