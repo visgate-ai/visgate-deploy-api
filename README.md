@@ -45,6 +45,40 @@ POST /v1/deployments  →  HF validation  →  GPU selection  →  RunPod endpoi
 
 ## Quick Start
 
+### Hosted API (no setup needed)
+
+A production instance is already running — all you need is your [RunPod API key](https://www.runpod.io/console/user/settings).
+
+```bash
+API_BASE="https://visgate-deploy-api-wxup7pxrsa-uc.a.run.app"
+
+# 1. Health check
+curl "$API_BASE/health"
+
+# 2. Deploy a model (uses your RunPod key — no account registration needed)
+curl -X POST "$API_BASE/v1/deployments" \
+  -H "Authorization: Bearer <YOUR_RUNPOD_API_KEY>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "hf_model_id": "stabilityai/sd-turbo",
+    "gpu_tier": "A10",
+    "user_webhook_url": "https://your-app.com/webhook"
+  }'
+# → {"deployment_id": "dep_2026_abc123", "status": "validating"}
+
+# 3. Poll status
+curl -H "Authorization: Bearer <YOUR_RUNPOD_API_KEY>" \
+  "$API_BASE/v1/deployments/dep_2026_abc123"
+# → {"status": "ready", "endpoint_url": "https://api.runpod.ai/v2/.../run"}
+
+# 4. Delete when done (stops RunPod billing)
+curl -X DELETE -H "Authorization: Bearer <YOUR_RUNPOD_API_KEY>" \
+  "$API_BASE/v1/deployments/dep_2026_abc123"
+```
+
+> **How auth works:** Your RunPod API key is the auth token — no separate registration.
+> The API creates RunPod endpoints under your account and charges go directly to your RunPod balance.
+
 ### Self-hosted (local, no GCP needed)
 
 ```bash
@@ -74,35 +108,6 @@ cd deploy-api && ./deploy.sh
 
 # Or use the GitHub Actions workflow (.github/workflows/deploy.yaml)
 # Set GCP_CREDENTIALS and GCP_PROJECT_ID secrets in your repo settings
-```
-
-### API Usage
-
-```bash
-API_BASE="https://YOUR_SERVICE_URL"
-
-# 1. Health check
-curl "$API_BASE/health"
-
-# 2. Deploy a model
-curl -X POST "$API_BASE/v1/deployments" \
-  -H "Authorization: Bearer <RUNPOD_API_KEY>" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "hf_model_id": "stabilityai/sd-turbo",
-    "gpu_tier": "A10",
-    "user_webhook_url": "https://your-app.com/webhook"
-  }'
-# → {"deployment_id": "dep_2026_abc123", "status": "validating"}
-
-# 3. Poll status
-curl -H "Authorization: Bearer <RUNPOD_API_KEY>" \
-  "$API_BASE/v1/deployments/dep_2026_abc123"
-# → {"status": "ready", "endpoint_url": "https://api.runpod.ai/v2/.../run"}
-
-# 4. Delete when done (stops billing)
-curl -X DELETE -H "Authorization: Bearer <RUNPOD_API_KEY>" \
-  "$API_BASE/v1/deployments/dep_2026_abc123"
 ```
 
 ## GPU Selection Algorithm
