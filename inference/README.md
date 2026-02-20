@@ -144,3 +144,4 @@ curl -s -X POST "https://api.runpod.ai/v2/ENDPOINT_ID/runsync" \
 ```
 
 Response body contains `output` with `image_base64`, `model_id`, etc. Decode base64 to get the PNG image.
+
