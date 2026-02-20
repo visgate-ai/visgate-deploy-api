@@ -42,18 +42,21 @@ POST /v1/deployments  →  HF validation  →  GPU selection  →  RunPod endpoi
 
 ## Quick Start
 
-### Self-hosted
+### Self-hosted (local, no GCP needed)
 
 ```bash
 git clone https://github.com/visgate-ai/visgate-deploy-api
 cd visgate-deploy-api/deploy-api
 
 # Configure
-cp .env.example .env   # edit GCP_PROJECT_ID, RUNPOD_TEMPLATE_ID, etc.
+cp .env.example .env
+# Minimum required for local dev:
+#   RUNPOD_TEMPLATE_ID=your-template-id
+# Leave GCP_PROJECT_ID empty — in-memory storage is used automatically.
 
-# Run locally (needs GCP credentials)
 pip install -r requirements.txt
 uvicorn src.main:app --reload
+# → API running at http://localhost:8000
 
 # Or with Docker
 docker build -t visgate-deploy-api .
