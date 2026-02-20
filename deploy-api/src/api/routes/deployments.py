@@ -448,7 +448,7 @@ async def delete_deployment(
             # For now default to runpod, but doc could store the provider name
             provider = get_provider("runpod")
             await provider.delete_endpoint(doc.runpod_endpoint_id, ctx.runpod_api_key)
-        except Exception:
+        except Exception:  # nosec B110 — best-effort cleanup, deletion failure must not block response
             pass
     ref = firestore_client.collection(settings.firestore_collection_deployments).document(deployment_id)
     ref.update({"status": "deleted"})

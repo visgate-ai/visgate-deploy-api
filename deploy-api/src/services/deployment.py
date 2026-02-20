@@ -415,7 +415,7 @@ async def mark_deployment_ready_and_notify(
         ready_dt = datetime.fromisoformat(now.replace("Z", "+00:00"))
         duration_seconds = (ready_dt - created_dt).total_seconds()
         record_deployment_ready_duration(duration_seconds)
-    except Exception:
+    except Exception:  # nosec B110 — metric failure must not block webhook dispatch
         pass
 
     payload = {

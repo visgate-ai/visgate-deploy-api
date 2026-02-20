@@ -89,7 +89,7 @@ async def validate_model(
                         # Fallback: raw param count (no dtype)
                         if _hf_weight_bytes[0] is None and sf and hasattr(sf, "total") and sf.total:
                             _hf_params_millions[0] = int(sf.total) // 1_000_000
-                    except Exception:
+                    except Exception:  # nosec B110 — optional safetensors metadata, fallback continues
                         pass
                     return
                 except Exception as e:
