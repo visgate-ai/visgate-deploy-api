@@ -21,11 +21,15 @@ class Settings(BaseSettings):
     )
 
     # GCP
-    gcp_project_id: str = Field(..., min_length=1, description="GCP project ID")
+    gcp_project_id: str = Field(default="", description="GCP project ID (leave empty for local dev with in-memory storage)")
     gcp_location: str = Field(default="europe-west1", description="GCP region for Cloud Tasks")
     cloud_tasks_queue_path: str = Field(
         default="",
         description="Full path to Cloud Tasks queue (projects/.../locations/.../queues/...)",
+    )
+    use_memory_repo: bool = Field(
+        default=False,
+        description="Use in-memory storage instead of Firestore. Auto-enabled when GCP_PROJECT_ID is empty.",
     )
 
     # Firestore
@@ -57,7 +61,7 @@ class Settings(BaseSettings):
 
     # Runpod
     docker_image: str = Field(
-        default="uzunenes/inference:latest",
+        default="visgate-ai/inference:latest",
         min_length=1,
         description="Docker image for Runpod inference workers",
     )
@@ -203,6 +207,11 @@ class Settings(BaseSettings):
         if u not in allowed:
             raise ValueError(f"log_level must be one of {allowed}")
         return u
+
+    @property
+    def effective_use_memory_repo(self) -> bool:
+        """True when memory repo should be used (explicit flag or no GCP project set)."""
+        return self.use_memory_repo or not self.gcp_project_id
 
     def resolve_secrets(self) -> None:
         """Resolve Secret Manager references for sensitive settings."""

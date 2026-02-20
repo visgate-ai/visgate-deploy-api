@@ -19,21 +19,46 @@ from src.core.telemetry import (
     record_webhook_failure,
     span,
 )
-from src.services.firestore_repo import (
-    append_log,
-    get_deployment,
-    get_firestore_client,
-    get_gpu_registry,
-    get_tier_mapping,
-    update_deployment,
-)
 from src.services.gpu_selection import select_gpu
 from src.services.gpu_selection import select_gpu_candidates
 from src.services.huggingface import validate_model
 from src.services.provider_factory import get_provider
-import src.services.runpod # Trigger registration
+import src.services.runpod  # Trigger provider registration
 from src.services.secret_cache import get_secrets
 from src.services.webhook import notify
+
+
+def _get_repo():
+    """Return the active repo module (firestore or in-memory) based on settings."""
+    if get_settings().effective_use_memory_repo:
+        import src.services.memory_repo as r
+    else:
+        import src.services.firestore_repo as r
+    return r
+
+
+def get_firestore_client(*args, **kwargs):
+    return _get_repo().get_firestore_client(*args, **kwargs)
+
+
+def append_log(*args, **kwargs):
+    return _get_repo().append_log(*args, **kwargs)
+
+
+def get_deployment(*args, **kwargs):
+    return _get_repo().get_deployment(*args, **kwargs)
+
+
+def get_gpu_registry(*args, **kwargs):
+    return _get_repo().get_gpu_registry(*args, **kwargs)
+
+
+def get_tier_mapping(*args, **kwargs):
+    return _get_repo().get_tier_mapping(*args, **kwargs)
+
+
+def update_deployment(*args, **kwargs):
+    return _get_repo().update_deployment(*args, **kwargs)
 
 def _now_iso() -> str:
     return datetime.now(UTC).isoformat().replace("+00:00", "Z")

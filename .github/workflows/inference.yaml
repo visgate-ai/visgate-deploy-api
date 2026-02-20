@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
 
 env:
-  IMAGE_NAME: uzunenes/inference
+  IMAGE_NAME: visgate-ai/inference
 
 jobs:
   build-and-push:

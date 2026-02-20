@@ -1,7 +1,9 @@
 """In-memory repository for deployments (non-persistent)."""
+import os
 from datetime import UTC, datetime
 from typing import Optional, Any
 from src.models.entities import DeploymentDoc, LogEntry
+from src.services.gpu_registry import DEFAULT_GPU_REGISTRY, DEFAULT_TIER_MAPPING
 
 # Global store
 _deployments: dict[str, dict] = {}
@@ -62,8 +64,37 @@ def get_api_key(
     collection: str,
     key: str,
 ) -> Optional[dict]:
-    # Hardcoded or env var based for simplicity if needed
-    import os
-    if key == os.getenv("ORCHESTRATOR_API_KEY", "test-key"):
-        return {"active": True, "owner": "admin"}
+    """Accept any non-empty key in local dev mode (or match ORCHESTRATOR_API_KEY env var)."""
+    expected = os.getenv("ORCHESTRATOR_API_KEY", "")
+    if expected:
+        return {"active": True, "owner": "admin"} if key == expected else None
+    # No key configured — accept any non-empty value for local dev
+    return {"active": True, "owner": "admin"} if key else None
+
+
+def get_gpu_registry(
+    client: Any,
+    collection: str,
+) -> list:
+    """Return default GPU registry (no Firestore needed)."""
+    return list(DEFAULT_GPU_REGISTRY)
+
+
+def get_tier_mapping(
+    client: Any,
+    collection: str,
+) -> dict:
+    """Return default tier mapping (no Firestore needed)."""
+    return dict(DEFAULT_TIER_MAPPING)
+
+
+def find_reusable_deployment(
+    client: Any,
+    collection: str,
+    api_key_id: str,
+    hf_model_id: str,
+    gpu_tier: Optional[str],
+    user_runpod_key: str,
+) -> None:
+    """In-memory mode does not support endpoint reuse — always returns None."""
     return None
