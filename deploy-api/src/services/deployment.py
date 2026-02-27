@@ -96,9 +96,20 @@ async def _probe_runpod_readiness(endpoint_url: str, api_key: str) -> tuple[bool
             return False, f"probe http {resp.status_code}: {resp.text[:200]}"
 
         payload = resp.json()
-        status = str(payload.get("status", "")).upper()
-        pipeline_loaded = bool(payload.get("pipeline_loaded"))
-        error_text = str(payload.get("error", ""))
+        job_status = str(payload.get("status", "")).upper()
+        if job_status in {"IN_QUEUE", "IN_PROGRESS"}:
+            return False, None
+        if job_status == "FAILED":
+            return False, str(payload.get("error", "RunPod job failed"))
+
+        output = payload.get("output") or {}
+        # Support fallback if structure is flat for some reason
+        if not output and "pipeline_loaded" in payload:
+            output = payload
+
+        status = str(output.get("status", "")).upper()
+        pipeline_loaded = bool(output.get("pipeline_loaded"))
+        error_text = str(output.get("error", ""))
 
         if status == "OK" and pipeline_loaded:
             return True, None
