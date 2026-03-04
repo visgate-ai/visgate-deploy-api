@@ -15,7 +15,7 @@ sequenceDiagram
     participant WH as webhook
 
     Client->>API: POST /v1/deployments
-    API->>FS: Create doc status=validating
+    API->>FS: Create doc status=accepted_cold
     API->>Orch: Background orchestrate_deployment()
     API-->>Client: 202 + deployment_id
 
@@ -63,7 +63,7 @@ Creates a deployment (async). Returns 202 with `deployment_id`; processing conti
 
 Returns current status, Runpod endpoint URL, logs, and error (if failed).
 
-**Response:** `status` one of: `validating`, `selecting_gpu`, `creating_endpoint`, `downloading_model`, `loading_model`, `ready`, `failed`, `webhook_failed`.
+**Response:** `status` progression: `accepted_cold` → `validating` → `selecting_gpu` → `creating_endpoint` → `loading_model` → `ready`. Terminal states: `failed`, `webhook_failed`.
 
 ### DELETE /v1/deployments/{deployment_id}
 
@@ -159,7 +159,11 @@ See [inference/README.md](../inference/README.md) for supported models, job I/O,
 
 ## Model specs (registry)
 
-Preconfigured models: `black-forest-labs/FLUX.1-schnell`, `black-forest-labs/FLUX.1-dev`, `stabilityai/sdxl-turbo`. See `src/models/model_specs_registry.py` for VRAM and GPU mapping.
+Preconfigured models with hand-tuned VRAM values (no byte-estimation needed):
+`black-forest-labs/FLUX.1-schnell`, `black-forest-labs/FLUX.1-dev`, `stabilityai/sdxl-turbo`,
+`stabilityai/stable-diffusion-xl-base-1.0`, `stabilityai/sd-turbo`, `stabilityai/stable-diffusion-2-1`,
+`runwayml/stable-diffusion-v1-5`, `PixArt-alpha/PixArt-Sigma-XL-2-1024-MS`, and more.
+See [`src/models/model_specs_registry.py`](src/models/model_specs_registry.py). Unknown models fall back to safetensors byte-estimation with 1.35× headroom.
 
 ## Examples
 

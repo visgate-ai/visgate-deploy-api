@@ -66,19 +66,20 @@ curl -X POST "$API_BASE/v1/deployments" \
 # → {"deployment_id": "dep_2026_abc123", "status": "accepted_cold", "estimated_ready_seconds": 180}
 
 # 3. Poll until ready (~2 min cold start)
-curl -H "Authorization: Bearer <YOUR_RUNPOD_API_KEY>" \
-  "$API_BASE/v1/deployments/dep_2026_abc123"
-# → {"status": "ready", "endpoint_url": "https://api.runpod.ai/v2/{endpoint_id}/run"}
+ENDPOINT_URL=$(curl -s -H "Authorization: Bearer <YOUR_RUNPOD_API_KEY>" \
+  "$API_BASE/v1/deployments/dep_2026_abc123" | jq -r '.endpoint_url')
+# status: accepted_cold → creating_endpoint → loading_model → ready
+# endpoint_url = "https://api.runpod.ai/v2/<endpoint_id>/run"
 
-# 4. Generate image (3s)
-curl -X POST https://api.runpod.ai/v2/{endpoint_id}/runsync \
+# 4. Generate image (3s for sdxl-turbo, 4 steps)
+curl -s -X POST "${ENDPOINT_URL}sync" \
   -H "Authorization: Bearer <YOUR_RUNPOD_API_KEY>" \
   -H "Content-Type: application/json" \
   -d '{"input":{"prompt":"your prompt","num_inference_steps":4,"guidance_scale":0.0,"width":512,"height":512}}' \
   | jq -r '.output.image_base64' | base64 -d > output.png
 
 # 5. Delete when done (stops RunPod billing)
-curl -X DELETE -H "Authorization: Bearer <YOUR_RUNPOD_API_KEY>" \
+curl -s -X DELETE -H "Authorization: Bearer <YOUR_RUNPOD_API_KEY>" \
   "$API_BASE/v1/deployments/dep_2026_abc123"
 ```
 
@@ -124,7 +125,6 @@ Models are matched to the cheapest GPU that fits:
 HF model  →  safetensors.parameters {BF16: N, F32: M, ...}
           →  Σ (param_count × bytes_per_dtype)  =  weight_bytes
           →  weight_bytes × 1.35 headroom        =  min_vram_gb
-          →  snap to real tier: 6/8/10/12/16/24/28/40/48/80 GB
           →  pick cheapest GPU in DEFAULT_GPU_REGISTRY with vram ≥ min_vram_gb
           →  capacity error → try next candidate (backoff loop)
 ```
@@ -133,15 +133,15 @@ HF model  →  safetensors.parameters {BF16: N, F32: M, ...}
 
 Default GPU registry (cheapest → most expensive):
 
-| GPU | VRAM | RunPod ID |
-|-----|------|-----------|
-| NVIDIA A16 | 16 GB | `AMPERE_16` |
-| NVIDIA A10 / A30 | 24 GB | `AMPERE_24` |
-| NVIDIA L40 / RTX 4090 | 24 GB | `ADA_24` |
-| NVIDIA A40 | 48 GB | `AMPERE_48` |
-| NVIDIA L40S | 48 GB | `ADA_48_PRO` |
-| NVIDIA A100 | 80 GB | `AMPERE_80` |
-| NVIDIA H100 | 80 GB | `ADA_80_PRO` |
+| GPU | VRAM | RunPod ID | `gpu_tier` alias |
+|-----|------|-----------|-----------------|
+| NVIDIA A16 | 16 GB | `AMPERE_16` | `A16`, `ECONOMY` |
+| NVIDIA A10 / A30 | 24 GB | `AMPERE_24` | `A10`, `STANDARD` |
+| NVIDIA L40 / RTX 4090 | 24 GB | `ADA_24` | `4090`, `STANDARD` |
+| NVIDIA A40 | 48 GB | `AMPERE_48` | `A40`, `PRO` |
+| NVIDIA L40S | 48 GB | `ADA_48_PRO` | `PRO` |
+| NVIDIA A100 | 80 GB | `AMPERE_80` | `A100`, `ULTIMATE` |
+| NVIDIA H100 | 80 GB | `ADA_80_PRO` | `H100`, `ULTIMATE` |
 
 ## S3 Model Cache
 
