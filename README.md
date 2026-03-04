@@ -197,6 +197,13 @@ RUNPOD_WORKERS_MIN=0                 # 0 = no idle cost, 1 = always warm
 RUNPOD_IDLE_TIMEOUT_SECONDS=120      # how long a worker stays up after last job
 RUNPOD_WORKERS_MAX=3
 
+# Durable task execution (recommended for production)
+# Without this, orchestration runs in-process and is killed on Cloud Run scale-to-zero
+CLOUD_TASKS_QUEUE_PATH=projects/PROJECT/locations/REGION/queues/QUEUE
+INTERNAL_WEBHOOK_BASE_URL=https://your-cloud-run-service.run.app
+CLOUD_TASKS_SERVICE_ACCOUNT=tasks-sa@PROJECT.iam.gserviceaccount.com
+INTERNAL_WEBHOOK_SECRET=your-random-secret
+
 # Optional S3 shared cache
 AWS_ACCESS_KEY_ID=...
 AWS_SECRET_ACCESS_KEY=...

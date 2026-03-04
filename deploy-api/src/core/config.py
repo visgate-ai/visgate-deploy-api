@@ -27,6 +27,14 @@ class Settings(BaseSettings):
         default="",
         description="Full path to Cloud Tasks queue (projects/.../locations/.../queues/...)",
     )
+    cloud_tasks_service_account: str = Field(
+        default="",
+        description=(
+            "Service account email attached as OIDC token to Cloud Tasks HTTP requests. "
+            "The SA must have roles/run.invoker on the Cloud Run service. "
+            "Example: visgate-sa@visgate.iam.gserviceaccount.com"
+        ),
+    )
     use_memory_repo: bool = Field(
         default=False,
         description="Use in-memory storage instead of Firestore. Auto-enabled when GCP_PROJECT_ID is empty.",

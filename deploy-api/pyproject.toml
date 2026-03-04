@@ -41,7 +41,10 @@ include = ["src*"]
 asyncio_mode = "auto"
 testpaths = ["tests"]
 pythonpath = ["."]
-filterwarnings = ["ignore::DeprecationWarning"]
+filterwarnings = [
+    "ignore::DeprecationWarning",
+    "ignore:coroutine.*was never awaited:RuntimeWarning",
+]
 
 [tool.ruff]
 line-length = 100

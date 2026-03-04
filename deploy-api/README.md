@@ -141,6 +141,17 @@ See [inference/README.md](../inference/README.md) for supported models, job I/O,
    - `INTERNAL_WEBHOOK_SECRET` – Optional secret for `/internal/deployment-ready` callback.
    - Tip: use `sm://SECRET_NAME` to auto-resolve from GCP Secret Manager.
 
+4. **Create Cloud Tasks queue** (recommended for production — eliminates F6 scale-to-zero risk):
+   ```bash
+   gcloud tasks queues create visgate-orchestration \
+     --location=us-central1 --project=YOUR_PROJECT
+   # Then set in Cloud Run env:
+   # CLOUD_TASKS_QUEUE_PATH=projects/YOUR_PROJECT/locations/us-central1/queues/visgate-orchestration
+   # INTERNAL_WEBHOOK_BASE_URL=https://your-cloud-run-service.run.app
+   # CLOUD_TASKS_SERVICE_ACCOUNT=your-sa@YOUR_PROJECT.iam.gserviceaccount.com
+   ```
+   The SA needs `roles/cloudtasks.enqueuer` + `roles/run.invoker` + `roles/secretmanager.admin`.
+
 ## Troubleshooting
 
 | Error | Cause | Solution |

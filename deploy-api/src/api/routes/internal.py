@@ -1,5 +1,7 @@
 """Internal routes: deployment-ready callback from inference container."""
 
+import asyncio
+import json
 from typing import Annotated
 
 from fastapi import APIRouter, Header, HTTPException
@@ -9,6 +11,7 @@ from src.core.config import get_settings
 from src.models.schemas import DeploymentReadyPayload
 from src.services.deployment import (
     mark_deployment_ready_and_notify,
+    orchestrate_deployment,
     update_deployment_phase_from_worker,
 )
 from src.services.firestore_repo import get_deployment, update_deployment
@@ -22,6 +25,71 @@ router = APIRouter(prefix="/internal", tags=["internal"])
 class LiveLogPayload(BaseModel):
     level: str = "INFO"
     message: str
+
+
+class OrchestrateTaskPayload(BaseModel):
+    """Payload for Cloud Tasks → /internal/tasks/orchestrate-deployment."""
+
+    deployment_id: str
+    secret_ref: str  # Secret Manager secret name; fetched and version-destroyed on first use
+
+
+def _fetch_and_destroy_task_secrets(secret_ref: str, project_id: str) -> dict:
+    """
+    Fetch per-deployment credentials from Secret Manager and immediately destroy the
+    secret version so credentials are not left at rest after orchestration starts.
+    """
+    from google.cloud import secretmanager  # lazy import
+
+    client = secretmanager.SecretManagerServiceClient()
+    version_path = f"projects/{project_id}/secrets/{secret_ref}/versions/latest"
+    response = client.access_secret_version(request={"name": version_path})
+    data = json.loads(response.payload.data.decode())
+
+    try:
+        client.destroy_secret_version(request={"name": version_path})
+    except Exception:
+        pass  # Non-critical; the secret version will eventually expire
+
+    return data
+
+
+@router.post("/tasks/orchestrate-deployment")
+async def run_orchestration_task(
+    payload: OrchestrateTaskPayload,
+    x_visgate_secret: Annotated[
+        str | None,
+        Header(alias="X-Visgate-Internal-Secret"),
+    ] = None,
+) -> dict:
+    """
+    Cloud Tasks target: receives deployment_id + secret_ref, fetches credentials from
+    Secret Manager, destroys the secret version, then kicks off orchestrate_deployment.
+
+    This endpoint is called by Google Cloud Tasks only — not by the inference container
+    or end users.
+    """
+    settings = get_settings()
+    if settings.internal_webhook_secret and x_visgate_secret != settings.internal_webhook_secret:
+        raise HTTPException(status_code=403, detail="Invalid internal secret")
+
+    try:
+        secrets = _fetch_and_destroy_task_secrets(payload.secret_ref, settings.gcp_project_id)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to fetch task secrets: {exc}")
+
+    asyncio.create_task(
+        orchestrate_deployment(
+            payload.deployment_id,
+            secrets["runpod_api_key"],
+            secrets.get("hf_token"),
+            secrets.get("aws_access_key_id"),
+            secrets.get("aws_secret_access_key"),
+            secrets.get("aws_endpoint_url"),
+            secrets.get("s3_model_url"),
+        )
+    )
+    return {"status": "accepted", "deployment_id": payload.deployment_id}
 
 
 @router.post("/deployment-ready/{deployment_id}")
