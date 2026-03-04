@@ -248,7 +248,7 @@ scripts/             # CLI utilities
 ```bash
 cd deploy-api
 pip install -r requirements.txt
-python -m pytest tests/ -q   # 39 tests, no cloud credentials needed
+python -m pytest tests/ -q   # 50 tests, no cloud credentials needed
 ```
 
 The test suite mocks Firestore and RunPod. For local API development leave `GCP_PROJECT_ID` empty — in-memory storage activates automatically.
