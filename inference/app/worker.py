@@ -202,7 +202,14 @@ def handler(job: dict[str, Any]) -> dict[str, Any]:
         }
 
     if _pipeline is None:
-        return {"error": "Model is still loading, please retry in a few seconds.", "status": "loading"}
+        # Wait up to 270s for model to finish loading instead of immediately failing
+        wait_start = time.time()
+        while _pipeline is None and _load_error is None:
+            if time.time() - wait_start > 270:
+                return {"error": "Model failed to load within timeout.", "status": "loading"}
+            time.sleep(2)
+        if _load_error:
+            return {"error": f"Model load failed: {_load_error}", "status": "failed"}
 
     prompt = job_input.get("prompt")
     if not prompt or not str(prompt).strip():

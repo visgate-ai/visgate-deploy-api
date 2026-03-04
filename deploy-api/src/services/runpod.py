@@ -76,6 +76,7 @@ class RunpodProvider(BaseInferenceProvider):
             "templateId": template_id,
             "gpuIds": gpu_id,
             "idleTimeout": kwargs.get("idle_timeout", 300),
+            "executionTimeoutMs": kwargs.get("execution_timeout_ms", 300000),
             "locations": kwargs.get("locations", "US"),
             "scalerType": kwargs.get("scaler_type", "QUEUE_DELAY"),
             "scalerValue": kwargs.get("scaler_value", 2),
