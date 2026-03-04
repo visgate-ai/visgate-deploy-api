@@ -230,14 +230,15 @@ async def create_deployment(
         warm_names.append(pool_endpoint_name(hf_model_id))
 
     warm_endpoint = None
-    try:
-        endpoints = await provider.list_endpoints(runpod_api_key)
-        for ep in endpoints:
-            if ep.get("name") in warm_names and _is_warm_status(ep.get("status", "")):
-                warm_endpoint = ep
-                break
-    except Exception as exc:
-        structured_log("WARNING", "Warm discovery failed", metadata={"error": str(exc)})
+    if settings.enable_endpoint_reuse:
+        try:
+            endpoints = await provider.list_endpoints(runpod_api_key)
+            for ep in endpoints:
+                if ep.get("name") in warm_names and _is_warm_status(ep.get("status", "")):
+                    warm_endpoint = ep
+                    break
+        except Exception as exc:
+            structured_log("WARNING", "Warm discovery failed", metadata={"error": str(exc)})
 
     if warm_endpoint and warm_endpoint.get("url"):
         reused_doc = DeploymentDoc(
@@ -425,6 +426,11 @@ async def stream_deployment_logs(
                 }
                 last_ts = max(last_ts, entry.timestamp)
                 yield f"event: log\ndata: {json.dumps(payload)}\n\n"
+            # Stop streaming once deployment reaches a terminal state
+            current = get_deployment(firestore_client, settings.firestore_collection_deployments, deployment_id)
+            if current and current.status in {"ready", "failed", "webhook_failed", "deleted"}:
+                yield f"event: done\ndata: {json.dumps({'deployment_id': deployment_id, 'status': current.status})}\n\n"
+                break
             await asyncio.sleep(1)
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")

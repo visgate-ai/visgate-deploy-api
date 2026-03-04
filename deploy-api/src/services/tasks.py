@@ -29,6 +29,10 @@ async def enqueue_orchestration_task(
     if settings.stateless_mode or not queue_path:
         structured_log(
             "WARNING",
+            # F6: With stateless_mode=True and no Cloud Tasks queue, orchestration runs in-process
+            # via asyncio.create_task. If the Cloud Run instance is scaled to zero while the task
+            # is running, the deployment will stall silently. For production reliability, set
+            # CLOUD_TASKS_QUEUE_PATH to use Cloud Tasks as a durable execution backend.
             "Stateless mode or missing Cloud Tasks; using in-process orchestration",
             deployment_id=deployment_id,
         )
@@ -73,6 +77,12 @@ async def enqueue_orchestration_task(
     url = f"{base_url}/internal/tasks/orchestrate-deployment"
     payload = {
         "deployment_id": deployment_id,
+        # F4: TODO: runpod_api_key and hf_token are passed in plain-text in the Cloud Tasks
+        # HTTP request body. This payload is readable in the GCP Cloud Tasks console and logs.
+        # Production hardening: store secrets in GCP Secret Manager and pass only a secret
+        # reference (e.g. sm://SECRET_NAME), or use Workload Identity + service account
+        # scoped to the Secret Manager resource. The secret_cache module already supports
+        # sm:// resolution via config.py, so the same pattern could apply here.
         "runpod_api_key": runpod_api_key,
         "hf_token": hf_token,
         "aws_access_key_id": aws_access_key_id,
@@ -98,14 +108,15 @@ async def enqueue_orchestration_task(
         if settings.internal_webhook_secret:
             task["http_request"]["headers"]["X-Visgate-Internal-Secret"] = settings.internal_webhook_secret
 
-        # Use OIDC token if service account auth is needed (usually required for Cloud Run)
-        # For simplicity in this "open source" version, we might assume the queue 
-        # has permissions or the service is public/authenticated via secret.
-        # But best practice is OIDC.
-        # task["http_request"]["oidc_token"] = {"service_account_email": ...} 
-        # We will omit OIDC for now as it requires more config (SA email), 
-        # and rely on the internal secret + network security.
-
+        # F5: TODO: Cloud Run targets require OIDC authentication for incoming requests.
+        # Without an OIDC token, the task will hit the service unauthenticated. This is
+        # currently mitigated by INTERNAL_WEBHOOK_SECRET, but OIDC provides a second
+        # layer and is the GCP-recommended approach. To enable:
+        #   task["http_request"]["oidc_token"] = {
+        #       "service_account_email": settings.cloud_tasks_service_account,
+        #       "audience": base_url,
+        #   }
+        # Requires: CLOUD_TASKS_SERVICE_ACCOUNT env var + SA with roles/run.invoker.
         response = client.create_task(request={"parent": queue_path, "task": task})
         
         structured_log(

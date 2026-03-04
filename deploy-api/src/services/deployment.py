@@ -386,6 +386,22 @@ async def orchestrate_deployment(
         log_step("ERROR", str(e), error_type=type(e).__name__)
 
 
+def _inference_example_input(model_id: str) -> dict:
+    """Return model-appropriate inference defaults for usage_example in webhook payload."""
+    mid = (model_id or "").lower()
+    # Turbo / distilled models: low steps, zero guidance
+    if any(k in mid for k in ("turbo", "schnell", "lightning", "hyper")):
+        return {"prompt": "An astronaut riding a horse in photorealistic style",
+                "num_inference_steps": 4, "guidance_scale": 0.0, "width": 512, "height": 512}
+    # FLUX-dev and similar: moderate steps, moderate guidance
+    if "flux" in mid:
+        return {"prompt": "An astronaut riding a horse in photorealistic style",
+                "num_inference_steps": 28, "guidance_scale": 3.5, "width": 1024, "height": 1024}
+    # Default: SDXL-base, SD2.x, SD3.x
+    return {"prompt": "An astronaut riding a horse in photorealistic style",
+            "num_inference_steps": 30, "guidance_scale": 7.5, "width": 1024, "height": 1024}
+
+
 async def mark_deployment_ready_and_notify(
     deployment_id: str,
     endpoint_url: Optional[str] = None,
@@ -447,11 +463,7 @@ async def mark_deployment_ready_and_notify(
                 "Authorization": "Bearer <YOUR_RUNPOD_API_KEY>"
             },
             "body": {
-                "input": {
-                    "prompt": "An astronaut riding a horse in photorealistic style",
-                    "num_inference_steps": 28,
-                    "guidance_scale": 3.5
-                }
+                "input": _inference_example_input(doc.hf_model_id or "")
             }
         }
     }
