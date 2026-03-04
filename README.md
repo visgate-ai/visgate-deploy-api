@@ -60,18 +60,24 @@ curl -X POST "$API_BASE/v1/deployments" \
   -H "Authorization: Bearer <YOUR_RUNPOD_API_KEY>" \
   -H "Content-Type: application/json" \
   -d '{
-    "hf_model_id": "stabilityai/sd-turbo",
-    "gpu_tier": "A10",
+    "hf_model_id": "stabilityai/sdxl-turbo",
     "user_webhook_url": "https://your-app.com/webhook"
   }'
-# → {"deployment_id": "dep_2026_abc123", "status": "validating"}
+# → {"deployment_id": "dep_2026_abc123", "status": "accepted_cold", "estimated_ready_seconds": 180}
 
-# 3. Poll status
+# 3. Poll until ready (~2 min cold start)
 curl -H "Authorization: Bearer <YOUR_RUNPOD_API_KEY>" \
   "$API_BASE/v1/deployments/dep_2026_abc123"
-# → {"status": "ready", "endpoint_url": "https://api.runpod.ai/v2/.../run"}
+# → {"status": "ready", "endpoint_url": "https://api.runpod.ai/v2/{endpoint_id}/run"}
 
-# 4. Delete when done (stops RunPod billing)
+# 4. Generate image (3s)
+curl -X POST https://api.runpod.ai/v2/{endpoint_id}/runsync \
+  -H "Authorization: Bearer <YOUR_RUNPOD_API_KEY>" \
+  -H "Content-Type: application/json" \
+  -d '{"input":{"prompt":"your prompt","num_inference_steps":4,"guidance_scale":0.0,"width":512,"height":512}}' \
+  | jq -r '.output.image_base64' | base64 -d > output.png
+
+# 5. Delete when done (stops RunPod billing)
 curl -X DELETE -H "Authorization: Bearer <YOUR_RUNPOD_API_KEY>" \
   "$API_BASE/v1/deployments/dep_2026_abc123"
 ```

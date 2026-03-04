@@ -49,13 +49,13 @@ Creates a deployment (async). Returns 202 with `deployment_id`; processing conti
 **Response (202):**
 ```json
 {
-  "deployment_id": "dep_2024_abc123",
-   "status": "accepted_cold",
+  "deployment_id": "dep_2026_abc123",
+  "status": "accepted_cold",
   "model_id": "black-forest-labs/FLUX.1-schnell",
   "estimated_ready_seconds": 180,
   "webhook_url": "https://your-app.com/webhook",
-   "path": "cold",
-  "created_at": "2024-02-14T10:00:00Z"
+  "path": "cold",
+  "created_at": "2026-03-04T10:00:00Z"
 }
 ```
 
@@ -73,8 +73,9 @@ Tears down the Runpod endpoint and marks deployment deleted. Returns 204.
 
 - **GET /health** – Liveness (<10ms).
 - **GET /readiness** – Checks Firestore connection.
+- **GET /metrics** – JSON counters: deployments created, webhook failures, RunPod errors, p50/p95 durations.
 
-- **[USAGE.md](USAGE.md)** - Local run steps, endpoint tests (curl examples), and real response samples.
+See [USAGE.md](USAGE.md) for local run steps and curl examples.
 
 ## Inference image (Runpod worker)
 
@@ -159,3 +160,53 @@ See [inference/README.md](../inference/README.md) for supported models, job I/O,
 ## Model specs (registry)
 
 Preconfigured models: `black-forest-labs/FLUX.1-schnell`, `black-forest-labs/FLUX.1-dev`, `stabilityai/sdxl-turbo`. See `src/models/model_specs_registry.py` for VRAM and GPU mapping.
+
+## Examples
+
+Tested on production — 2026-03-04, `stabilityai/sdxl-turbo`, 129s end-to-end.
+
+```bash
+BASE="https://visgate-deploy-api-wxup7pxrsa-uc.a.run.app"
+RP_KEY="rpa_..."
+```
+
+**1. Create deployment**
+```bash
+curl -s -X POST $BASE/v1/deployments \
+  -H "Authorization: Bearer $RP_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"hf_model_id":"stabilityai/sdxl-turbo","user_webhook_url":"https://httpbin.org/post"}'
+# → 202  {"deployment_id":"dep_2026_400ea2c4","status":"accepted_cold","estimated_ready_seconds":180}
+```
+
+**2. Poll until ready (~121s)**
+```bash
+curl -s $BASE/v1/deployments/dep_2026_400ea2c4 \
+  -H "Authorization: Bearer $RP_KEY" | jq .status
+# validating → creating_endpoint → loading_model → "ready"
+# .endpoint_url = "https://api.runpod.ai/v2/{endpoint_id}/run"
+```
+
+**3. Generate image (3s)**
+```bash
+curl -s -X POST https://api.runpod.ai/v2/{endpoint_id}/runsync \
+  -H "Authorization: Bearer $RP_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"input":{"prompt":"aerial view of Istanbul at sunset","num_inference_steps":4,"guidance_scale":0.0,"width":512,"height":512,"seed":42}}' \
+  | jq -r '.output.image_base64' | base64 -d > output.png
+# → 512×512px PNG, 535 KB
+```
+
+**4. Cleanup**
+```bash
+curl -s -X DELETE $BASE/v1/deployments/dep_2026_400ea2c4 \
+  -H "Authorization: Bearer $RP_KEY"
+# → 204
+```
+
+| Stage | Time |
+|---|---|
+| Deploy accepted | <1s |
+| Container ready | ~121s |
+| Inference (4 steps) | 3s |
+| **Total** | **129s** |
