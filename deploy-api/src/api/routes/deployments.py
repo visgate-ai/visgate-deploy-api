@@ -24,7 +24,6 @@ from src.services.deployment import mark_deployment_ready_and_notify
 from src.services.endpoint_naming import model_slug, pool_endpoint_name, user_endpoint_name
 from src.services.firestore_repo import get_deployment, list_deployments, set_deployment
 from src.services.log_tunnel import get_live_logs_since
-from src.services.model_resolver import get_hf_name
 from src.services.model_capabilities import supports_task
 from src.services.pool_policy import choose_pool_policy
 from src.services.provider_factory import get_provider
@@ -97,6 +96,8 @@ def _doc_to_response(doc: DeploymentDoc) -> DeploymentResponse:
     return DeploymentResponse(
         deployment_id=doc.deployment_id,
         status=doc.status,
+        hf_model_id=doc.hf_model_id,
+        task=doc.task,
         runpod_endpoint_id=doc.runpod_endpoint_id,
         endpoint_url=doc.endpoint_url,
         gpu_allocated=doc.gpu_allocated,
@@ -126,21 +127,6 @@ def _build_s3_model_url(base_url: str, path_suffix: str) -> str:
 
 def _parse_csv_set(value: str) -> set[str]:
     return {item.strip() for item in (value or "").split(",") if item.strip()}
-
-
-def _resolve_hf_model_id(body: DeploymentCreate) -> str:
-    """Resolve to HF model ID: either hf_model_id or get_hf_name(model_name, provider)."""
-    if body.hf_model_id:
-        if body.model_name:
-            raise InvalidDeploymentRequestError(
-                "Provide either hf_model_id or model_name (+ optional provider), not both",
-            )
-        return body.hf_model_id
-    if not body.model_name:
-        raise InvalidDeploymentRequestError(
-            "Provide either hf_model_id or model_name (+ optional provider)",
-        )
-    return get_hf_name(body.model_name, body.provider)
 
 
 @router.get("", response_model=DeploymentListResponse, summary="List deployments")
@@ -174,24 +160,21 @@ async def create_deployment(
     ctx: Annotated[RequestContext, Depends(get_request_context)],
     firestore_client=Depends(get_firestore),
 ) -> DeploymentResponse202:
-    """Create a new deployment (async). Returns 202 with deployment_id; processing continues in background.
-    Use either hf_model_id or (model_name + optional provider). deploy_model(hf_name, gpu=auto) -> webhook.
-    """
+    """Create a new deployment (async). Returns 202 with deployment_id; processing continues in background."""
     settings = get_settings()
     from src.core.logging import structured_log
     structured_log(
         "INFO",
         "create_deployment request",
         metadata={
-            "model_name": body.model_name,
-            "provider": body.provider,
+            "hf_model_id": body.hf_model_id,
             "gpu_tier": body.gpu_tier,
             "region": body.region,
             "task": body.task,
         },
     )
-    hf_model_id = _resolve_hf_model_id(body)
-    structured_log("INFO", f"Resolved hf_model_id: {hf_model_id}")
+    hf_model_id = body.hf_model_id
+    structured_log("INFO", f"hf_model_id: {hf_model_id}")
     if body.task and not supports_task(hf_model_id, body.task):
         raise InvalidDeploymentRequestError(
             f"Model {hf_model_id} does not support task {body.task}"
@@ -290,6 +273,7 @@ async def create_deployment(
             endpoint_name=warm_endpoint.get("name"),
             pool_policy=pool_policy.name,
             region=body.region,
+            task=body.task,
         )
         set_deployment(firestore_client, settings.firestore_collection_deployments, reused_doc)
         await mark_deployment_ready_and_notify(
@@ -323,6 +307,7 @@ async def create_deployment(
         endpoint_name=user_endpoint_name(ctx.user_hash, hf_model_id),
         pool_policy=pool_policy.name,
         region=body.region,
+        task=body.task,
     )
     set_deployment(firestore_client, settings.firestore_collection_deployments, doc)
 

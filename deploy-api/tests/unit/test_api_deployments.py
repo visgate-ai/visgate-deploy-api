@@ -37,19 +37,19 @@ def test_post_deployments_202(
 
 
 @patch("src.api.routes.deployments.enqueue_orchestration_task", new_callable=AsyncMock)
-def test_post_deployments_with_model_name_provider(
+def test_post_deployments_task_field_accepted(
     mock_enqueue,
     client: TestClient,
     auth_headers: dict,
 ) -> None:
-    """POST with model_name + provider (fal, veo3) resolves to HF ID and returns 202."""
+    """POST with explicit task field returns 202 and the task is accepted."""
     resp = client.post(
         "/v1/deployments",
         json={
-            "model_name": "veo3",
-            "provider": "fal",
+            "hf_model_id": "black-forest-labs/FLUX.1-schnell",
             "user_runpod_key": "rpa_xxx",
             "user_webhook_url": "https://example.com/webhook",
+            "task": "text2img",
         },
         headers=auth_headers,
     )
@@ -58,8 +58,23 @@ def test_post_deployments_with_model_name_provider(
     assert data["model_id"] == "black-forest-labs/FLUX.1-schnell"
     assert "deployment_id" in data
     assert data["status"] == "accepted_cold"
-    
     mock_enqueue.assert_called_once()
+
+
+def test_post_deployments_missing_hf_model_id_returns_422(
+    client: TestClient,
+    auth_headers: dict,
+) -> None:
+    """POST without hf_model_id returns 422 (required field)."""
+    resp = client.post(
+        "/v1/deployments",
+        json={
+            "user_runpod_key": "rpa_xxx",
+            "user_webhook_url": "https://example.com/webhook",
+        },
+        headers=auth_headers,
+    )
+    assert resp.status_code == 422
 
 
 def test_post_deployments_401_without_auth(client: TestClient, deployment_create_payload: dict) -> None:

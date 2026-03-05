@@ -226,6 +226,8 @@ async def orchestrate_deployment(
             "HF_MODEL_ID": hf_model_id,
             "VISGATE_DEPLOYMENT_ID": deployment_id,
         }
+        if doc.task:
+            env["TASK"] = doc.task
         if hf_token:
             env["HF_TOKEN"] = hf_token
         

@@ -8,16 +8,10 @@ from pydantic import BaseModel, Field, HttpUrl
 
 # --- Request ---
 class DeploymentCreate(BaseModel):
-    """POST /v1/deployments request body.
+    """POST /v1/deployments request body."""
 
-    Either hf_model_id OR (model_name + optional provider) must be set.
-    Flow: model_name = get_models(provider=fal, "veo3") [external] -> hf_name = get_hf_name(model_name, provider) -> deploy_model(hf_name, gpu=auto) -> webhook.
-    """
-
-    hf_model_id: Optional[str] = Field(default=None, min_length=1, max_length=256, description="Hugging Face model ID (or use model_name+provider)")
-    model_name: Optional[str] = Field(default=None, min_length=1, max_length=128, description="Model name from get_models (e.g. veo3); resolved to HF ID via get_hf_name")
-    provider: Optional[str] = Field(default=None, max_length=64, description="Provider from get_models (e.g. fal)")
-    user_runpod_key: Optional[str] = Field(default=None, min_length=1, description="Runpod API key (optional if provided via Authorization header)")
+    hf_model_id: str = Field(..., min_length=1, max_length=256, description="Hugging Face model ID, e.g. 'black-forest-labs/FLUX.1-schnell'. See GET /v1/models for supported models.")
+    user_runpod_key: Optional[str] = Field(default=None, min_length=1, description="RunPod API key. If omitted, the Authorization Bearer token is used. Providing it here takes precedence.")
     user_webhook_url: HttpUrl = Field(..., description="URL to notify when deployment is ready")
     gpu_tier: Optional[str] = Field(default=None, max_length=64, description="e.g. A40; auto-select if omitted")
     hf_token: Optional[str] = Field(default=None, description="Optional HF token for gated models")
@@ -91,6 +85,8 @@ class DeploymentResponse(BaseModel):
 
     deployment_id: str
     status: DeploymentStatus
+    hf_model_id: str = ""
+    task: Optional[str] = None
     runpod_endpoint_id: Optional[str] = None
     endpoint_url: Optional[str] = None
     gpu_allocated: Optional[str] = None

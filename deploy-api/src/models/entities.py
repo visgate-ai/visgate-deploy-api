@@ -50,6 +50,7 @@ class DeploymentDoc:
     endpoint_name: Optional[str] = None
     pool_policy: Optional[str] = None
     region: Optional[str] = None
+    task: Optional[str] = None
 
     def to_firestore_dict(self) -> dict[str, Any]:
         return {
@@ -74,6 +75,7 @@ class DeploymentDoc:
             "endpoint_name": self.endpoint_name,
             "pool_policy": self.pool_policy,
             "region": self.region,
+            "task": self.task,
         }
 
     @classmethod
@@ -101,4 +103,5 @@ class DeploymentDoc:
             endpoint_name=d.get("endpoint_name"),
             pool_policy=d.get("pool_policy"),
             region=d.get("region"),
+            task=d.get("task"),
         )

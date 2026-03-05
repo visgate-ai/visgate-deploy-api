@@ -8,7 +8,6 @@ from src.services.gpu_registry import (
     select_gpu_id_for_vram,
     gpu_id_to_display_name,
 )
-from src.services.model_resolver import get_hf_name, UnknownModelError
 
 __all__ = [
     "ModelInfo",
@@ -18,6 +17,4 @@ __all__ = [
     "get_provider",
     "select_gpu_id_for_vram",
     "gpu_id_to_display_name",
-    "get_hf_name",
-    "UnknownModelError",
 ]
