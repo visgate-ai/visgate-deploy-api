@@ -73,6 +73,7 @@ jobs:
             FIRESTORE_COLLECTION_GPU_TIERS=visgate_deploy_api_gpu_tiers
             GCP_LOCATION=${{ env.REGION }}
             CLOUD_TASKS_QUEUE_PATH=projects/${{ env.PROJECT_ID }}/locations/${{ env.REGION }}/queues/visgate-orchestrator-queue
+            CLOUD_TASKS_SERVICE_ACCOUNT=93820292919-compute@developer.gserviceaccount.com
             INTERNAL_WEBHOOK_BASE_URL=${{ secrets.INTERNAL_WEBHOOK_BASE_URL }}
             DOCKER_IMAGE=visgateai/inference:latest
             LOG_LEVEL=INFO
