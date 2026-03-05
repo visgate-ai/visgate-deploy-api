@@ -108,6 +108,29 @@ def get_tier_mapping(
     return mapping
 
 
+def list_deployments(
+    client: firestore.Client,
+    collection: str,
+    user_hash: str,
+    status_filter: Optional[str] = None,
+    limit: int = 20,
+) -> list[DeploymentDoc]:
+    """List deployments belonging to a given user (by user_hash), newest first."""
+    query = (
+        client.collection(collection)
+        .where(filter=FieldFilter("user_hash", "==", user_hash))
+        .order_by("created_at", direction=firestore.Query.DESCENDING)
+        .limit(min(limit, 100))
+    )
+    if status_filter:
+        query = query.where(filter=FieldFilter("status", "==", status_filter))
+    return [
+        DeploymentDoc.from_firestore_dict(snap.to_dict())
+        for snap in query.stream()
+        if snap.to_dict()
+    ]
+
+
 def find_reusable_deployment(
     client: firestore.Client,
     collection: str,

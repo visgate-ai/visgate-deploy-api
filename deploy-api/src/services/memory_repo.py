@@ -88,6 +88,24 @@ def get_tier_mapping(
     return dict(DEFAULT_TIER_MAPPING)
 
 
+def list_deployments(
+    client: Any,
+    collection: str,
+    user_hash: str,
+    status_filter: Optional[str] = None,
+    limit: int = 20,
+) -> list:
+    """Return deployments for given user_hash from in-memory store."""
+    results = [
+        DeploymentDoc.from_firestore_dict(data)
+        for data in _deployments.values()
+        if data.get("user_hash") == user_hash
+        and (not status_filter or data.get("status") == status_filter)
+    ]
+    results.sort(key=lambda d: d.created_at or "", reverse=True)
+    return results[:min(limit, 100)]
+
+
 def find_reusable_deployment(
     client: Any,
     collection: str,

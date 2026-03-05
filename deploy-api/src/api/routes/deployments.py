@@ -1,4 +1,4 @@
-"""Deployment CRUD: POST /v1/deployments, GET /v1/deployments/{id}, DELETE /v1/deployments/{id}."""
+"""Deployment CRUD: GET/POST /v1/deployments, GET /v1/deployments/{id}, DELETE /v1/deployments/{id}."""
 
 import asyncio
 import json
@@ -15,13 +15,14 @@ from src.core.telemetry import record_deployment_created
 from src.models.entities import DeploymentDoc, LogEntry
 from src.models.schemas import (
     DeploymentCreate,
+    DeploymentListResponse,
     DeploymentResponse,
     DeploymentResponse202,
     LogEntrySchema,
 )
 from src.services.deployment import mark_deployment_ready_and_notify
 from src.services.endpoint_naming import model_slug, pool_endpoint_name, user_endpoint_name
-from src.services.firestore_repo import get_deployment, set_deployment
+from src.services.firestore_repo import get_deployment, list_deployments, set_deployment
 from src.services.log_tunnel import get_live_logs_since
 from src.services.model_resolver import get_hf_name
 from src.services.model_capabilities import supports_task
@@ -140,6 +141,31 @@ def _resolve_hf_model_id(body: DeploymentCreate) -> str:
             "Provide either hf_model_id or model_name (+ optional provider)",
         )
     return get_hf_name(body.model_name, body.provider)
+
+
+@router.get("", response_model=DeploymentListResponse, summary="List deployments")
+async def list_deployments_route(
+    ctx: Annotated[RequestContext, Depends(get_request_context)],
+    firestore_client=Depends(get_firestore),
+    deployment_status: str | None = None,
+    limit: int = 20,
+) -> DeploymentListResponse:
+    """List deployments for the authenticated API key, newest first.
+
+    Use ``deployment_status`` to filter by status (e.g. ``ready``, ``failed``).
+    ``limit`` is capped at 100.
+    """
+    settings = get_settings()
+    limit = max(1, min(limit, 100))
+    docs = list_deployments(
+        firestore_client,
+        settings.firestore_collection_deployments,
+        user_hash=ctx.user_hash,
+        status_filter=deployment_status,
+        limit=limit,
+    )
+    items = [_doc_to_response(doc) for doc in docs]
+    return DeploymentListResponse(deployments=items, total=len(items), limit=limit)
 
 
 @router.post("", response_model=DeploymentResponse202, status_code=status.HTTP_202_ACCEPTED)

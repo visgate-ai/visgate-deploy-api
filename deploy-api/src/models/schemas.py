@@ -103,6 +103,31 @@ class DeploymentResponse(BaseModel):
     ready_at: Optional[datetime] = None
 
 
+class DeploymentListResponse(BaseModel):
+    """GET /v1/deployments response."""
+
+    deployments: list[DeploymentResponse]
+    total: int
+    limit: int
+
+
+class ModelEntry(BaseModel):
+    """Single entry in GET /v1/models response."""
+
+    model_id: str
+    tasks: list[str]
+    gpu_memory_gb: int
+    cached: bool = False  # True when model weights are stored in platform R2 cache
+
+
+class ModelsListResponse(BaseModel):
+    """GET /v1/models response."""
+
+    models: list[ModelEntry]
+    total: int
+    cache_enabled: bool
+
+
 # --- Internal webhook (container -> orchestrator) ---
 class DeploymentReadyPayload(BaseModel):
     """POST /internal/deployment-ready/{deployment_id} optional body."""
