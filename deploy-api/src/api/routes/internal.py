@@ -62,22 +62,15 @@ def _fetch_and_destroy_task_secrets(secret_ref: str, project_id: str) -> dict:
 @router.post("/tasks/orchestrate-deployment")
 async def run_orchestration_task(
     payload: OrchestrateTaskPayload,
-    x_visgate_secret: Annotated[
-        str | None,
-        Header(alias="X-Visgate-Internal-Secret"),
-    ] = None,
 ) -> dict:
     """
     Cloud Tasks target: receives deployment_id + secret_ref, fetches credentials from
     Secret Manager, destroys the secret version, then kicks off orchestrate_deployment.
 
-    This endpoint is called by Google Cloud Tasks only — not by the inference container
-    or end users.
+    This endpoint is called by Google Cloud Tasks only (authenticated via OIDC token).
+    No additional secret header check needed — OIDC provides sufficient authentication.
     """
     settings = get_settings()
-    # OIDC token from Cloud Tasks provides auth — skip header check for now
-    # if settings.internal_webhook_secret and x_visgate_secret != settings.internal_webhook_secret:
-    #     raise HTTPException(status_code=403, detail="Invalid internal secret")
 
     try:
         secrets = _fetch_and_destroy_task_secrets(payload.secret_ref, settings.gcp_project_id)
