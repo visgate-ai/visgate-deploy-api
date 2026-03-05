@@ -86,7 +86,7 @@ def get_api_key(
 
 def get_gpu_registry(
     client: firestore.Client,
-    collection: str = "gpu_registry",
+    collection: str = "visgate_deploy_api_gpu_registry",
 ) -> list[dict]:
     """Fetch list of GPU specifications from Firestore."""
     docs = client.collection(collection).stream()
@@ -95,7 +95,7 @@ def get_gpu_registry(
 
 def get_tier_mapping(
     client: firestore.Client,
-    collection: str = "gpu_tiers",
+    collection: str = "visgate_deploy_api_gpu_tiers",
 ) -> dict[str, list[str]]:
     """Fetch tier to GPU ID mappings from Firestore."""
     docs = client.collection(collection).stream()

@@ -67,6 +67,8 @@ jobs:
             FIRESTORE_COLLECTION_DEPLOYMENTS=visgate_deploy_api_deployments
             FIRESTORE_COLLECTION_LOGS=visgate_deploy_api_logs
             FIRESTORE_COLLECTION_API_KEYS=visgate_deploy_api_api_keys
+            FIRESTORE_COLLECTION_GPU_REGISTRY=visgate_deploy_api_gpu_registry
+            FIRESTORE_COLLECTION_GPU_TIERS=visgate_deploy_api_gpu_tiers
             GCP_LOCATION=${{ env.REGION }}
             CLOUD_TASKS_QUEUE_PATH=projects/${{ env.PROJECT_ID }}/locations/${{ env.REGION }}/queues/visgate-orchestrator-queue
             INTERNAL_WEBHOOK_BASE_URL=${{ secrets.INTERNAL_WEBHOOK_BASE_URL }}

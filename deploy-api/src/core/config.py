@@ -52,17 +52,17 @@ class Settings(BaseSettings):
         description="Firestore collection for deployment audit logs",
     )
     firestore_collection_api_keys: str = Field(
-        default="api_keys",
+        default="visgate_deploy_api_api_keys",
         min_length=1,
         description="Firestore collection for API keys",
     )
     firestore_collection_gpu_registry: str = Field(
-        default="gpu_registry",
+        default="visgate_deploy_api_gpu_registry",
         min_length=1,
         description="Firestore collection for GPU specifications",
     )
     firestore_collection_gpu_tiers: str = Field(
-        default="gpu_tiers",
+        default="visgate_deploy_api_gpu_tiers",
         min_length=1,
         description="Firestore collection for GPU tier mappings",
     )
