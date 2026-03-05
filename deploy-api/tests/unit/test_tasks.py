@@ -261,6 +261,7 @@ def test_internal_orchestrate_endpoint_200(mock_create_task, mock_orch, mock_fet
 
 
 @patch("src.api.routes.internal._fetch_and_destroy_task_secrets")
+@pytest.mark.skip(reason="Secret header check disabled - OIDC auth is used instead")
 def test_internal_orchestrate_endpoint_403_wrong_secret(mock_fetch, monkeypatch):
     """POST with wrong X-Visgate-Internal-Secret returns 403."""
     from src.core.config import get_settings
