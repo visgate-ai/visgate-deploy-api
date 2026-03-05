@@ -1,0 +1,24 @@
+{
+  "indexes": [
+    {
+      "collectionGroup": "visgate_deploy_api_deployments",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "user_hash", "order": "ASCENDING" },
+        { "fieldPath": "created_at", "order": "DESCENDING" },
+        { "fieldPath": "__name__", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "visgate_deploy_api_deployments",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "status", "order": "ASCENDING" },
+        { "fieldPath": "user_hash", "order": "ASCENDING" },
+        { "fieldPath": "created_at", "order": "DESCENDING" },
+        { "fieldPath": "__name__", "order": "DESCENDING" }
+      ]
+    }
+  ],
+  "fieldOverrides": []
+}
