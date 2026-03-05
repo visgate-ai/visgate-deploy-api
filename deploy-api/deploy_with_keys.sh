@@ -39,7 +39,6 @@ load_optional_var() {
 for f in "${REPO_ROOT}/deploy-api/.env" "${REPO_ROOT}/.env.local"; do
   load_optional_var "${f}" "RUNPOD_TEMPLATE_ID"
   load_optional_var "${f}" "INTERNAL_WEBHOOK_BASE_URL"
-  load_optional_var "${f}" "INTERNAL_WEBHOOK_SECRET"
 done
 
 CLOUD_TASKS_QUEUE_PATH="projects/${PROJECT_ID}/locations/${REGION}/queues/visgate-orchestrator-queue"
@@ -54,6 +53,8 @@ gcloud run deploy "${SERVICE_NAME}" \
   --update-env-vars "FIRESTORE_COLLECTION_DEPLOYMENTS=visgate_deploy_api_deployments" \
   --update-env-vars "FIRESTORE_COLLECTION_LOGS=visgate_deploy_api_logs" \
   --update-env-vars "FIRESTORE_COLLECTION_API_KEYS=visgate_deploy_api_api_keys" \
+  --update-env-vars "FIRESTORE_COLLECTION_GPU_REGISTRY=visgate_deploy_api_gpu_registry" \
+  --update-env-vars "FIRESTORE_COLLECTION_GPU_TIERS=visgate_deploy_api_gpu_tiers" \
   --update-env-vars "CLOUD_TASKS_QUEUE_PATH=${CLOUD_TASKS_QUEUE_PATH}" \
   --update-env-vars "GCP_LOCATION=${REGION}" \
   --update-env-vars "LOG_LEVEL=INFO" \

@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.6.0] - 2026-03-05 — API cleanup + production hardening
+
+### Changed
+- `hf_model_id` is now **required** (was optional with `model_name`/`provider` aliases). API now accepts only direct HF model IDs.
+- `task` field added end-to-end: stored in Firestore and forwarded to RunPod worker as `TASK` env var.
+- `DeploymentResponse` now includes `hf_model_id` and `task` fields.
+- All Firestore collections renamed to `visgate_deploy_api_*` prefix (consistent namespace across GCP project with multiple services).
+- Secret Manager secrets renamed: `RUNPOD_TEMPLATE_ID` → `VISGATE_DEPLOY_API_RUNPOD_TEMPLATE_ID`, `INTERNAL_WEBHOOK_SECRET` → `VISGATE_DEPLOY_API_INTERNAL_WEBHOOK_SECRET`.
+- GitHub Actions `deploy.yaml` now runs `pytest` before build — failed tests block deploy.
+- Firestore composite indexes defined in `firestore.indexes.json` (infra-as-code).
+- `GET /v1/deployments` and `GET /v1/models` endpoints added (list own deployments, browse model catalog).
+
+### Removed
+- `model_name` and `provider` fields from `DeploymentCreate` — removed alias/mapping system entirely.
+- `model_resolver.py` and its tests — no more fake model name → HF ID mappings.
+- `deploy.sh` (superseded by `deploy_with_keys.sh`).
+- `cloudbuild.yaml` (superseded by GitHub Actions).
+- `USAGE.md` (content merged into README).
+- Stale SM secrets: `VISGATE_SHARED_AWS_*`, `FIREBASE_TOKEN`, 9× `visgate-dep-*` deployment key cache secrets.
+
 ## [0.5.0] - 2026-02-20 — Local dev mode + OSS release
 
 ### Added

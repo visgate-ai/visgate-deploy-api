@@ -75,8 +75,6 @@ Tears down the Runpod endpoint and marks deployment deleted. Returns 204.
 - **GET /readiness** – Checks Firestore connection.
 - **GET /metrics** – JSON counters: deployments created, webhook failures, RunPod errors, p50/p95 durations.
 
-See [USAGE.md](USAGE.md) for local run steps and curl examples.
-
 ## Inference image (Runpod worker)
 
 **Flow:** Runpod starts a pod using the template’s Docker image (our inference image). The orchestrator passes **endpoint env** (`HF_MODEL_ID`, `VISGATE_WEBHOOK`, optional `HF_TOKEN`) when creating the endpoint. The container starts, loads the Hugging Face model from `HF_MODEL_ID`, then POSTs to `VISGATE_WEBHOOK` so the orchestrator can set status to `ready` and call your webhook. After that, requests to the endpoint run inference with that model.
@@ -127,18 +125,14 @@ See [inference/README.md](../inference/README.md) for supported models, job I/O,
 
 1. **Build and push**
    ```bash
-   gcloud builds submit --config=cloudbuild.yaml .
+   cd deploy-api && ./deploy_with_keys.sh
    ```
 
-2. **Or use deploy script**
-   ```bash
-   chmod +x deploy.sh
-   ./deploy.sh
-   ```
+2. **Or use GitHub Actions** (recommended) — push to `main` triggers `deploy.yaml` automatically.
 
 3. **Set secrets** in Secret Manager and env:
-   - `RUNPOD_TEMPLATE_ID` – Runpod serverless template that uses our inference image (create via `scripts/create_runpod_template.py`).
-   - `INTERNAL_WEBHOOK_SECRET` – Optional secret for `/internal/deployment-ready` callback.
+   - `VISGATE_DEPLOY_API_RUNPOD_TEMPLATE_ID` – RunPod serverless template that uses our inference image (create via `scripts/create_runpod_template.py`).
+   - `VISGATE_DEPLOY_API_INTERNAL_WEBHOOK_SECRET` – Optional secret for `/internal/deployment-ready` callback.
    - Tip: use `sm://SECRET_NAME` to auto-resolve from GCP Secret Manager.
 
 4. **Create Cloud Tasks queue** (recommended for production — eliminates F6 scale-to-zero risk):
