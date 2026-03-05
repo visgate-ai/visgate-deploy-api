@@ -22,7 +22,7 @@ class Settings(BaseSettings):
 
     # GCP
     gcp_project_id: str = Field(default="", description="GCP project ID (leave empty for local dev with in-memory storage)")
-    gcp_location: str = Field(default="europe-west1", description="GCP region for Cloud Tasks")
+    gcp_location: str = Field(default="us-central1", description="GCP region for Cloud Tasks")
     cloud_tasks_queue_path: str = Field(
         default="",
         description="Full path to Cloud Tasks queue (projects/.../locations/.../queues/...)",
