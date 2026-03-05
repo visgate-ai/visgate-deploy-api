@@ -4,7 +4,7 @@
 
 set -euo pipefail
 
-REGION="${1:-us-central1}"
+REGION="${1:-europe-west3}"
 PROJECT_ID="${GCP_PROJECT_ID:-visgate}"
 SERVICE_NAME="visgate-deploy-api"
 IMAGE="gcr.io/${PROJECT_ID}/${SERVICE_NAME}:latest"

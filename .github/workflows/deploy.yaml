@@ -8,7 +8,7 @@ on:
 
 env:
   PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }} # visgate
-  REGION: us-central1 # Cheaper/Standard region
+  REGION: europe-west3 # Align with Firestore region
   SERVICE_NAME: visgate-deploy-api
   IMAGE: gcr.io/${{ secrets.GCP_PROJECT_ID }}/visgate-deploy-api:${{ github.sha }}
 
