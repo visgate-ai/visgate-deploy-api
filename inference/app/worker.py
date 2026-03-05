@@ -26,6 +26,7 @@ from app.config import (
     OUTPUT_S3_URL,
     CDN_BASE_URL,
     RETURN_BASE64,
+    RUNPOD_API_KEY,
 )
 from app.loader import load_pipeline_optimized as load_pipeline
 
@@ -72,8 +73,13 @@ def _request_cleanup(reason: str) -> None:
     if not VISGATE_DEPLOYMENT_ID or not VISGATE_WEBHOOK:
         return
     cleanup_url = VISGATE_WEBHOOK.replace("/deployment-ready/", "/cleanup/")
+    payload: dict = {"reason": reason}
+    if RUNPOD_API_KEY:
+        # Include the key so the API can delete the endpoint from any Cloud Run instance
+        # (eliminates the in-memory secret_cache multi-instance race).
+        payload["runpod_api_key"] = RUNPOD_API_KEY
     try:
-        _post_json(cleanup_url, {"reason": reason})
+        _post_json(cleanup_url, payload)
     except Exception:
         return
 

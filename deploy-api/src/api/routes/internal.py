@@ -2,7 +2,7 @@
 
 import asyncio
 import json
-from typing import Annotated
+from typing import Annotated, Optional
 
 from fastapi import APIRouter, Header, HTTPException
 from pydantic import BaseModel
@@ -25,6 +25,11 @@ router = APIRouter(prefix="/internal", tags=["internal"])
 class LiveLogPayload(BaseModel):
     level: str = "INFO"
     message: str
+
+
+class CleanupPayload(BaseModel):
+    reason: str = "idle_timeout"
+    runpod_api_key: Optional[str] = None  # Passed by worker; eliminates multi-instance secret_cache dependency
 
 
 class OrchestrateTaskPayload(BaseModel):
@@ -159,6 +164,7 @@ async def log_tunnel(
 @router.post("/cleanup/{deployment_id}")
 async def cleanup_endpoint(
     deployment_id: str,
+    payload: CleanupPayload | None = None,
     secret: str | None = None,
     x_visgate_secret: Annotated[
         str | None,
@@ -177,13 +183,19 @@ async def cleanup_endpoint(
     if not doc or not doc.runpod_endpoint_id:
         return {"status": "noop", "reason": "missing_endpoint"}
 
-    secrets = get_secrets(deployment_id)
-    if not secrets:
+    # Prefer key sent by the worker (resolves multi-instance secret_cache race).
+    # Fall back to in-memory cache for asyncio-based deployments.
+    cleanup_body = payload or CleanupPayload()
+    runpod_api_key = cleanup_body.runpod_api_key
+    if not runpod_api_key:
+        cached = get_secrets(deployment_id)
+        runpod_api_key = cached.runpod_api_key if cached else None
+    if not runpod_api_key:
         return {"status": "noop", "reason": "missing_runpod_key"}
 
     provider = get_provider(doc.provider or "runpod")
     try:
-        await provider.delete_endpoint(doc.runpod_endpoint_id, secrets.runpod_api_key)
+        await provider.delete_endpoint(doc.runpod_endpoint_id, runpod_api_key)
         update_deployment(fs_client, settings.firestore_collection_deployments, deployment_id, {"status": "deleted"})
         return {"status": "deleted"}
     except Exception as exc:

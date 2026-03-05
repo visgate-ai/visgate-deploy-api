@@ -192,7 +192,7 @@ async def orchestrate_deployment(
 
         user_runpod_key = runpod_api_key
         gpu_tier = doc.gpu_tier
-        hf_token: Optional[str] = hf_token_override or (cached.hf_token if cached else None)
+        hf_token: Optional[str] = hf_token_override or (cached.hf_token if cached else None) or settings.hf_pro_access_token
         # Logic: Default to runpod for now, but could be fetched from doc metadata
         provider_name = "runpod" 
         provider = get_provider(provider_name)
@@ -229,9 +229,23 @@ async def orchestrate_deployment(
         if hf_token:
             env["HF_TOKEN"] = hf_token
         
-        # Add AWS/S3 credentials for optimized loader
-        effective_access_key = aws_access_key_id or settings.aws_access_key_id
-        effective_secret_key = aws_secret_access_key or settings.aws_secret_access_key
+        # AWS/S3 credentials injected into RunPod worker:
+        #   - cache_scope=private  → user's own keys (passed via aws_access_key_id param)
+        #   - cache_scope=shared   → platform R2 READ-ONLY key (RW key stays in API only)
+        #   - cache_scope=off      → no keys
+        # The RW platform key (settings.aws_access_key_id) is intentionally NEVER sent to workers.
+        if aws_access_key_id:
+            # User's private credentials
+            effective_access_key = aws_access_key_id
+            effective_secret_key = aws_secret_access_key or ""
+        elif settings.r2_access_key_id_r:
+            # Platform shared cache — read-only key
+            effective_access_key = settings.r2_access_key_id_r
+            effective_secret_key = settings.r2_secret_access_key_r
+        else:
+            effective_access_key = ""
+            effective_secret_key = ""
+
         effective_endpoint = aws_endpoint_url or settings.aws_endpoint_url
         effective_s3_model_url = s3_model_url or settings.s3_model_url
 
@@ -244,10 +258,13 @@ async def orchestrate_deployment(
         if effective_s3_model_url:
             env["S3_MODEL_URL"] = effective_s3_model_url
 
+        # Worker needs its own RunPod key to self-cleanup when idle
+        env["RUNPOD_API_KEY"] = user_runpod_key
+
         internal_base = getattr(settings, "internal_webhook_base_url", "") or ""
+        # Internal secret travels via header (X-Visgate-Internal-Secret), never in URL
+        # to prevent it appearing in Cloud Run access logs.
         visgate_webhook = f"{internal_base}/internal/deployment-ready/{deployment_id}"
-        if settings.internal_webhook_secret:
-            visgate_webhook += f"?secret={settings.internal_webhook_secret}"
         env["VISGATE_WEBHOOK"] = visgate_webhook
         if settings.internal_webhook_secret:
             env["VISGATE_INTERNAL_SECRET"] = settings.internal_webhook_secret

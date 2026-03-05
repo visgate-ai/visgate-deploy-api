@@ -3,7 +3,7 @@
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import Field, field_validator
+from pydantic import AliasChoices, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -148,11 +148,47 @@ class Settings(BaseSettings):
         description="Base URL of this service for container callback (e.g. https://orch-xxx.run.app)",
     )
 
-    # AWS / S3 (Optional, for optimized loading)
-    aws_access_key_id: str = Field(default="", description="AWS Access Key ID")
-    aws_secret_access_key: str = Field(default="", description="AWS Secret Access Key")
-    aws_endpoint_url: str = Field(default="", description="AWS Endpoint URL (for R2/Minio)")
-    s3_model_url: str = Field(default="", description="Base S3 URL for model cache")
+    # Platform HF token (used when user does not supply their own hf_token)
+    hf_pro_access_token: str = Field(
+        default="",
+        validation_alias=AliasChoices("visgate_deploy_api_hf_pro_access_token", "hf_pro_access_token"),
+        description="Platform HF Pro token — auto-injected for gated models when caller omits hf_token",
+    )
+
+    # R2 — read-write key (API-side only: future write-back, NEVER sent to workers)
+    aws_access_key_id: str = Field(
+        default="",
+        validation_alias=AliasChoices("visgate_deploy_api_r2_access_key_id_rw", "aws_access_key_id"),
+        description="R2 RW Access Key ID — API use only (manifest writes, write-back). Not injected into RunPod workers.",
+    )
+    aws_secret_access_key: str = Field(
+        default="",
+        validation_alias=AliasChoices("visgate_deploy_api_r2_secret_access_key_rw", "aws_secret_access_key"),
+        description="R2 RW Secret Access Key — API use only.",
+    )
+    aws_endpoint_url: str = Field(
+        default="",
+        validation_alias=AliasChoices("visgate_deploy_api_s3_api_r2", "aws_endpoint_url"),
+        description="R2 endpoint URL — e.g. https://ACCOUNT.r2.cloudflarestorage.com",
+    )
+    s3_model_url: str = Field(
+        default="s3://visgate-models/models",
+        validation_alias=AliasChoices("visgate_deploy_api_s3_model_url_r2", "s3_model_url"),
+        description="Base S3 URL for the platform model cache (e.g. s3://visgate-models/models)",
+    )
+
+    # R2 — read-only key (injected into RunPod workers for shared cache downloads)
+    r2_access_key_id_r: str = Field(
+        default="",
+        validation_alias=AliasChoices("visgate_deploy_api_r2_access_key_id_r", "r2_access_key_id_r"),
+        description="R2 read-only Access Key ID — injected into RunPod workers for shared cache reads.",
+    )
+    r2_secret_access_key_r: str = Field(
+        default="",
+        validation_alias=AliasChoices("visgate_deploy_api_r2_secret_access_key_r", "r2_secret_access_key_r"),
+        description="R2 read-only Secret Access Key — injected into RunPod workers.",
+    )
+
     shared_cache_enabled: bool = Field(
         default=True,
         description="Enable platform shared cache mode",
@@ -244,8 +280,11 @@ class Settings(BaseSettings):
 
         self.runpod_template_id = _resolve(self.runpod_template_id)
         self.internal_webhook_secret = _resolve(self.internal_webhook_secret)
+        self.hf_pro_access_token = _resolve(self.hf_pro_access_token)
         self.aws_access_key_id = _resolve(self.aws_access_key_id)
         self.aws_secret_access_key = _resolve(self.aws_secret_access_key)
+        self.r2_access_key_id_r = _resolve(self.r2_access_key_id_r)
+        self.r2_secret_access_key_r = _resolve(self.r2_secret_access_key_r)
 
 
 @lru_cache

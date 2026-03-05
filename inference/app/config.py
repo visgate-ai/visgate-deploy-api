@@ -24,6 +24,11 @@ VISGATE_DEPLOYMENT_ID: Optional[str] = get_env("VISGATE_DEPLOYMENT_ID")
 CLEANUP_IDLE_TIMEOUT_SECONDS: int = int(get_env("CLEANUP_IDLE_TIMEOUT_SECONDS", "900") or "900")
 CLEANUP_FAILURE_THRESHOLD: int = int(get_env("CLEANUP_FAILURE_THRESHOLD", "3") or "3")
 
+# RunPod API key — used only for self-cleanup (DELETE endpoint when idle/failed)
+# Set by orchestrator at deployment time so multi-instance API does not need to
+# hold the key in memory for cleanup callbacks.
+RUNPOD_API_KEY: Optional[str] = get_env("RUNPOD_API_KEY")
+
 # Device
 DEVICE: str = "cuda"  # Runpod provides GPU
 
