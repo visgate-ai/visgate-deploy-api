@@ -7,12 +7,12 @@ set -euo pipefail
 REGION="${1:-europe-west3}"
 PROJECT_ID="${GCP_PROJECT_ID:-visgate}"
 SERVICE_NAME="visgate-deploy-api"
-IMAGE="gcr.io/${PROJECT_ID}/${SERVICE_NAME}:latest"
+IMAGE="europe-west3-docker.pkg.dev/${PROJECT_ID}/visgate/${SERVICE_NAME}:latest"
 
 echo "Project: ${PROJECT_ID} Region: ${REGION}"
 
-# Ensure Docker can push to GCR
-gcloud auth configure-docker gcr.io --quiet 2>/dev/null || true
+# Ensure Docker can push to Artifact Registry
+gcloud auth configure-docker europe-west3-docker.pkg.dev --quiet 2>/dev/null || true
 
 # Enable APIs
 gcloud services enable run.googleapis.com containerregistry.googleapis.com firestore.googleapis.com secretmanager.googleapis.com --project="${PROJECT_ID}"

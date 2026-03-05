@@ -10,7 +10,7 @@ env:
   PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }} # visgate
   REGION: europe-west3 # Align with Firestore region
   SERVICE_NAME: visgate-deploy-api
-  IMAGE: gcr.io/${{ secrets.GCP_PROJECT_ID }}/visgate-deploy-api:${{ github.sha }}
+  IMAGE: europe-west3-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/visgate/visgate-deploy-api:${{ github.sha }}
 
 jobs:
   deploy:
@@ -50,7 +50,7 @@ jobs:
           python -m pytest tests/ -q --tb=short
 
       - name: Configure Docker
-        run: gcloud auth configure-docker --quiet
+        run: gcloud auth configure-docker europe-west3-docker.pkg.dev --quiet
 
       - name: Build and Push Container
         run: |
@@ -74,7 +74,7 @@ jobs:
             GCP_LOCATION=${{ env.REGION }}
             CLOUD_TASKS_QUEUE_PATH=projects/${{ env.PROJECT_ID }}/locations/${{ env.REGION }}/queues/visgate-orchestrator-queue
             CLOUD_TASKS_SERVICE_ACCOUNT=93820292919-compute@developer.gserviceaccount.com
-            INTERNAL_WEBHOOK_BASE_URL=https://visgate-deploy-api-wxup7pxrsa-uc.a.run.app
+            INTERNAL_WEBHOOK_BASE_URL=https://visgate-deploy-api-wxup7pxrsa-ey.a.run.app
             DOCKER_IMAGE=visgateai/inference:latest
             LOG_LEVEL=INFO
           secrets: |
