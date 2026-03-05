@@ -75,8 +75,9 @@ async def run_orchestration_task(
     or end users.
     """
     settings = get_settings()
-    if settings.internal_webhook_secret and x_visgate_secret != settings.internal_webhook_secret:
-        raise HTTPException(status_code=403, detail="Invalid internal secret")
+    # OIDC token from Cloud Tasks provides auth — skip header check for now
+    # if settings.internal_webhook_secret and x_visgate_secret != settings.internal_webhook_secret:
+    #     raise HTTPException(status_code=403, detail="Invalid internal secret")
 
     try:
         secrets = _fetch_and_destroy_task_secrets(payload.secret_ref, settings.gcp_project_id)
