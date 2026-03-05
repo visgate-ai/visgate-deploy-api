@@ -75,8 +75,8 @@ jobs:
             DOCKER_IMAGE=visgateai/inference:latest
             LOG_LEVEL=INFO
           secrets: |
-            RUNPOD_TEMPLATE_ID=RUNPOD_TEMPLATE_ID:latest
-            INTERNAL_WEBHOOK_SECRET=INTERNAL_WEBHOOK_SECRET:latest
+            RUNPOD_TEMPLATE_ID=VISGATE_DEPLOY_API_RUNPOD_TEMPLATE_ID:latest
+            INTERNAL_WEBHOOK_SECRET=VISGATE_DEPLOY_API_INTERNAL_WEBHOOK_SECRET:latest
           flags: '--allow-unauthenticated'
 
       - name: Route Traffic to Latest Revision
