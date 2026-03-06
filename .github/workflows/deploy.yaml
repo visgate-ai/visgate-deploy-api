@@ -77,9 +77,16 @@ jobs:
             INTERNAL_WEBHOOK_BASE_URL=https://visgate-deploy-api-wxup7pxrsa-ey.a.run.app
             DOCKER_IMAGE=visgateai/inference:latest
             LOG_LEVEL=INFO
+            RUNPOD_WORKERS_MAX=3
+            RUNPOD_WORKERS_MIN=0
           secrets: |
             RUNPOD_TEMPLATE_ID=VISGATE_DEPLOY_API_RUNPOD_TEMPLATE_ID:latest
             INTERNAL_WEBHOOK_SECRET=VISGATE_DEPLOY_API_INTERNAL_WEBHOOK_SECRET:latest
+            AWS_ACCESS_KEY_ID=VISGATE_DEPLOY_API_R2_ACCESS_KEY_ID_RW:latest
+            AWS_SECRET_ACCESS_KEY=VISGATE_DEPLOY_API_R2_SECRET_ACCESS_KEY_RW:latest
+            AWS_ENDPOINT_URL=VISGATE_DEPLOY_API_S3_API_R2:latest
+            R2_ACCESS_KEY_ID_R=VISGATE_DEPLOY_API_R2_ACCESS_KEY_ID_R:latest
+            R2_SECRET_ACCESS_KEY_R=VISGATE_DEPLOY_API_R2_SECRET_ACCESS_KEY_R:latest
           flags: '--allow-unauthenticated'
 
       - name: Route Traffic to Latest Revision
