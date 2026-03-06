@@ -100,10 +100,15 @@ def _cache_model_once(hf_model_id: str, hf_token: str | None) -> dict[str, objec
         return {"status": "already_cached", "files_uploaded": 0, "manifest_updated": True}
 
     with tempfile.TemporaryDirectory() as tmpdir:
+        # Keep HF hub cache inside tmpdir so it stays on writable tmpfs.
+        # Without this, huggingface_hub tries to write to ~/.cache which may be
+        # unwritable in Cloud Run (home dir owned by root, app user != root).
+        hf_cache_dir = os.path.join(tmpdir, ".hf_cache")
         snapshot_download(
             repo_id=hf_model_id,
             token=hf_token,
             local_dir=tmpdir,
+            cache_dir=hf_cache_dir,
             ignore_patterns=_CACHE_IGNORE_PATTERNS,
         )
 
