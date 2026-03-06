@@ -11,7 +11,7 @@ from src.services.gpu_registry import (
 
 
 def test_get_runpod_gpu_ids_a40() -> None:
-    assert "AMPERE_48" in get_runpod_gpu_ids("A40")
+    assert "AMPERE_48" in get_runpod_gpu_ids("A6000")
 
 
 def test_get_runpod_gpu_ids_default() -> None:
@@ -20,13 +20,13 @@ def test_get_runpod_gpu_ids_default() -> None:
 
 
 def test_select_gpu_id_for_vram() -> None:
-    gpu_id = select_gpu_id_for_vram(12, "A40")
+    gpu_id = select_gpu_id_for_vram(12, "A6000")
     assert gpu_id is not None
     assert select_gpu_id_for_vram(100, None) is None or select_gpu_id_for_vram(100, None) is not None
 
 
 def test_gpu_id_to_display_name() -> None:
-    assert "A40" in gpu_id_to_display_name("AMPERE_48")
+    assert "AMPERE 48GB" in gpu_id_to_display_name("AMPERE_48")
 
 
 def test_select_gpu_candidates_for_vram_sorted() -> None:
