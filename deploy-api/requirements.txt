@@ -13,6 +13,7 @@ google-cloud-tasks>=2.13.0
 
 # HTTP client
 httpx>=0.26.0
+requests>=2.31.0
 
 # AWS / S3-compatible storage (Cloudflare R2 manifest reads)
 boto3>=1.34.0

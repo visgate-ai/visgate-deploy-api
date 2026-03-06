@@ -3,7 +3,6 @@
 import asyncio
 import json
 import os
-import tempfile
 import time
 from typing import Annotated, Optional
 
@@ -58,35 +57,17 @@ def _task_log(level: str, message: str, **metadata: object) -> None:
     structured_log(level, message, operation="r2.cache_model", metadata=metadata)
 
 
-def _upload_directory_to_r2(tmpdir: str, hf_model_id: str) -> int:
-    import boto3
-
-    settings = get_settings()
-    model_slug = hf_model_id.replace("/", "--")
-    s3_prefix = f"models/{model_slug}"
-    s3 = boto3.client(
-        "s3",
-        endpoint_url=settings.aws_endpoint_url,
-        aws_access_key_id=settings.aws_access_key_id,
-        aws_secret_access_key=settings.aws_secret_access_key,
-        region_name="auto",
-    )
-
-    file_count = 0
-    for dirpath, _, filenames in os.walk(tmpdir):
-        for filename in filenames:
-            if filename.startswith("."):
-                continue
-            local_file = os.path.join(dirpath, filename)
-            rel_path = os.path.relpath(local_file, tmpdir)
-            s3_key = f"{s3_prefix}/{rel_path}"
-            s3.upload_file(local_file, "visgate-models", s3_key)
-            file_count += 1
-    return file_count
+def _should_skip_file(path: str) -> bool:
+    """Return True if this file matches _CACHE_IGNORE_PATTERNS."""
+    import fnmatch
+    return any(fnmatch.fnmatch(os.path.basename(path), pat) for pat in _CACHE_IGNORE_PATTERNS)
 
 
 def _cache_model_once(hf_model_id: str, hf_token: str | None) -> dict[str, object]:
-    from huggingface_hub import snapshot_download
+    """Stream model files from HuggingFace directly to R2 — no local disk required."""
+    import boto3
+    import requests
+    from huggingface_hub import list_repo_tree
 
     settings = get_settings()
 
@@ -99,38 +80,44 @@ def _cache_model_once(hf_model_id: str, hf_token: str | None) -> dict[str, objec
     if hf_model_id in cached_ids:
         return {"status": "already_cached", "files_uploaded": 0, "manifest_updated": True}
 
-    with tempfile.TemporaryDirectory() as tmpdir:
-        # Keep HF hub cache inside tmpdir so it stays on writable tmpfs.
-        # Without this, huggingface_hub tries to write to ~/.cache which may be
-        # unwritable in Cloud Run (home dir owned by root, app user != root).
-        hf_cache_dir = os.path.join(tmpdir, ".hf_cache")
-        snapshot_download(
-            repo_id=hf_model_id,
-            token=hf_token,
-            local_dir=tmpdir,
-            cache_dir=hf_cache_dir,
-            ignore_patterns=_CACHE_IGNORE_PATTERNS,
-        )
+    model_slug = hf_model_id.replace("/", "--")
+    s3_prefix = f"models/{model_slug}"
+    s3 = boto3.client(
+        "s3",
+        endpoint_url=settings.aws_endpoint_url,
+        aws_access_key_id=settings.aws_access_key_id,
+        aws_secret_access_key=settings.aws_secret_access_key,
+        region_name="auto",
+    )
 
-        cached_ids = fetch_cached_model_ids(
-            endpoint_url=settings.aws_endpoint_url,
-            access_key_id=settings.aws_access_key_id,
-            secret_access_key=settings.aws_secret_access_key,
-            force_refresh=True,
-        )
-        if hf_model_id in cached_ids:
-            return {"status": "already_cached", "files_uploaded": 0, "manifest_updated": True}
+    hf_headers = {"Authorization": f"Bearer {hf_token}"} if hf_token else {}
+    file_count = 0
+    for item in list_repo_tree(hf_model_id, recursive=True, token=hf_token or None):
+        if getattr(item, "type", None) != "file":
+            continue
+        file_path = item.path
+        if _should_skip_file(file_path):
+            continue
 
-        file_count = _upload_directory_to_r2(tmpdir, hf_model_id)
-        manifest_updated = add_model_to_manifest(
-            model_id=hf_model_id,
-            endpoint_url=settings.aws_endpoint_url,
-            access_key_id=settings.aws_access_key_id,
-            secret_access_key=settings.aws_secret_access_key,
-        )
-        if not manifest_updated:
-            raise RuntimeError("manifest update failed after model upload")
-        return {"status": "ok", "files_uploaded": file_count, "manifest_updated": True}
+        url = f"https://huggingface.co/{hf_model_id}/resolve/main/{file_path}"
+        resp = requests.get(url, stream=True, headers=hf_headers, timeout=600)
+        resp.raise_for_status()
+        resp.raw.decode_content = True  # handle gzip/deflate transparently
+
+        s3_key = f"{s3_prefix}/{file_path}"
+        s3.upload_fileobj(resp.raw, "visgate-models", s3_key)
+        file_count += 1
+        _task_log("INFO", f"Streamed to R2: {file_path}", s3_key=s3_key)
+
+    manifest_updated = add_model_to_manifest(
+        model_id=hf_model_id,
+        endpoint_url=settings.aws_endpoint_url,
+        access_key_id=settings.aws_access_key_id,
+        secret_access_key=settings.aws_secret_access_key,
+    )
+    if not manifest_updated:
+        raise RuntimeError("manifest update failed after model upload")
+    return {"status": "ok", "files_uploaded": file_count, "manifest_updated": True}
 
 
 class OrchestrateTaskPayload(BaseModel):
