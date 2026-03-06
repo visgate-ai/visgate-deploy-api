@@ -263,20 +263,20 @@ class Settings(BaseSettings):
             if not value:
                 return value
             if not value.startswith("sm://"):
-                return value
+                return value.strip()
             secret_name = value.removeprefix("sm://")
             project = self.gcp_project_id
             try:
                 from google.cloud import secretmanager
             except Exception:
-                return value
+                return value.strip()
             client = secretmanager.SecretManagerServiceClient()
             secret_path = f"projects/{project}/secrets/{secret_name}/versions/latest"
             try:
                 response = client.access_secret_version(request={"name": secret_path})
-                return response.payload.data.decode("utf-8")
+                return response.payload.data.decode("utf-8").strip()
             except Exception:
-                return value
+                return value.strip()
 
         self.runpod_template_id = _resolve(self.runpod_template_id)
         self.internal_webhook_secret = _resolve(self.internal_webhook_secret)
