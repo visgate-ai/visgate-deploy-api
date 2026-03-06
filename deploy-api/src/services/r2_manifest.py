@@ -10,6 +10,7 @@ import json
 import logging
 import threading
 import time
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 from src.core.config import get_settings
@@ -177,6 +178,12 @@ def add_model_to_manifest(
 
             models.add(model_id)
             manifest["models"] = sorted(models)
+
+            # Store per-model metadata so we can tell when each model was cached.
+            meta: dict = manifest.setdefault("model_meta", {})
+            if model_id not in meta:
+                meta[model_id] = {"cached_at": datetime.now(UTC).isoformat().replace("+00:00", "Z")}
+
             s3.put_object(
                 Bucket=bucket,
                 Key=_MANIFEST_KEY,

@@ -1,6 +1,7 @@
 """Internal routes: deployment-ready callback from inference container."""
 
 import asyncio
+import fnmatch
 import json
 import os
 import time
@@ -59,7 +60,6 @@ def _task_log(level: str, message: str, **metadata: object) -> None:
 
 def _should_skip_file(path: str) -> bool:
     """Return True if this file matches _CACHE_IGNORE_PATTERNS."""
-    import fnmatch
     return any(fnmatch.fnmatch(os.path.basename(path), pat) for pat in _CACHE_IGNORE_PATTERNS)
 
 
@@ -67,6 +67,7 @@ def _cache_model_once(hf_model_id: str, hf_token: str | None) -> dict[str, objec
     """Stream model files from HuggingFace directly to R2 — no local disk required."""
     import boto3
     import requests
+    from boto3.s3.transfer import TransferConfig
     from huggingface_hub import list_repo_tree
 
     settings = get_settings()
@@ -90,6 +91,15 @@ def _cache_model_once(hf_model_id: str, hf_token: str | None) -> dict[str, objec
         region_name="auto",
     )
 
+    # Force multipart for files > 64 MB so R2 never sees an unbounded single-PUT.
+    # Without this, boto3 can't infer Content-Length from a streaming response and
+    # may produce a malformed request on large model shards (e.g. FLUX 12 GB).
+    transfer_cfg = TransferConfig(
+        multipart_threshold=64 * 1024 * 1024,  # 64 MB
+        multipart_chunksize=64 * 1024 * 1024,  # 64 MB per part
+        use_threads=False,                       # single-threaded inside Cloud Tasks
+    )
+
     hf_headers = {"Authorization": f"Bearer {hf_token}"} if hf_token else {}
     file_count = 0
     for item in list_repo_tree(hf_model_id, recursive=True, token=hf_token or None):
@@ -105,9 +115,11 @@ def _cache_model_once(hf_model_id: str, hf_token: str | None) -> dict[str, objec
         resp.raw.decode_content = True  # handle gzip/deflate transparently
 
         s3_key = f"{s3_prefix}/{file_path}"
-        s3.upload_fileobj(resp.raw, "visgate-models", s3_key)
+        file_size = int(resp.headers.get("Content-Length", 0)) or None
+        extra_args = {"ContentLength": file_size} if file_size else {}
+        s3.upload_fileobj(resp.raw, "visgate-models", s3_key, ExtraArgs=extra_args, Config=transfer_cfg)
         file_count += 1
-        _task_log("INFO", f"Streamed to R2: {file_path}", s3_key=s3_key)
+        _task_log("INFO", f"Streamed to R2: {file_path}", s3_key=s3_key, size_bytes=file_size)
 
     manifest_updated = add_model_to_manifest(
         model_id=hf_model_id,
