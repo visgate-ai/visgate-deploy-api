@@ -21,6 +21,12 @@ async def notify(
     POST payload to user webhook URL with exponential backoff.
     Returns True if delivery succeeded, False otherwise (then callers should set webhook_failed).
     """
+    from src.core.config import get_settings
+    settings = get_settings()
+    headers = {"Content-Type": "application/json"}
+    if settings.internal_webhook_secret:
+        headers["X-Visgate-Internal-Secret"] = settings.internal_webhook_secret
+
     with span("webhook.notify", {"url": url, "deployment_id": deployment_id}):
         last_error: Optional[Exception] = None
         for attempt in range(retries):
@@ -29,7 +35,7 @@ async def notify(
                     resp = await client.post(
                         url,
                         json=payload,
-                        headers={"Content-Type": "application/json"},
+                        headers=headers,
                     )
                 if 200 <= resp.status_code < 300:
                     structured_log(

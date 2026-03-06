@@ -61,10 +61,11 @@ async def get_request_context(
         return RequestContext(runpod_api_key=runpod_api_key, user_hash=user_hash, client_ip=client_ip)
 
     token: Optional[str] = None
-    if credentials and credentials.credentials:
-        token = credentials.credentials
-    if not token and x_runpod_api_key:
+    if x_runpod_api_key:
         token = x_runpod_api_key
+    elif credentials and credentials.credentials:
+        token = credentials.credentials
+    
     if not token:
         raise UnauthorizedError("Missing or invalid Runpod API key")
 

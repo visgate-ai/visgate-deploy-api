@@ -280,17 +280,48 @@ async def orchestrate_deployment(
         # Common data for all providers
         endpoint_name = doc.endpoint_name or f"visgate-{deployment_id}"
         locations = (doc.region or settings.runpod_default_locations).strip()
+        
+        # MULTI-GPU TARGETING: Select top 3 candidates to increase availability
+        target_candidates = gpu_candidates[:3]
+        target_ids = [c[0] for c in target_candidates]
+        target_display = ", ".join([c[1] for c in target_candidates])
+        
+        log_step(
+            "INFO", 
+            f"Deploying to GPU pool: {target_display}",
+            target_ids=target_ids
+        )
+
         endpoint_data = None
-        last_error: Exception | None = None
-        for candidate_id, candidate_display in gpu_candidates:
-            try:
+        last_error = None
+        try:
+            endpoint_data = await provider.create_endpoint(
+                name=endpoint_name,
+                gpu_ids=target_ids, # Pass a list of GPU IDs
+                image=settings.docker_image,
+                env=env,
+                api_key=user_runpod_key,
+                template_id=settings.runpod_template_id,
+                workers_min=settings.runpod_workers_min,
+                workers_max=settings.runpod_workers_max,
+                idle_timeout=settings.runpod_idle_timeout_seconds,
+                scaler_type=settings.runpod_scaler_type,
+                scaler_value=settings.runpod_scaler_value,
+                volume_in_gb=settings.runpod_volume_size_gb,
+                locations=locations,
+            )
+        except Exception as e:
+            last_error = e
+            if is_capacity_error(str(e)):
+                log_step("WARNING", "Out of capacity for entire pool; falling back to global search")
+                # Fallback to all candidates if top 3 fail (more expensive/rare ones)
+                full_ids = [c[0] for c in gpu_candidates]
                 endpoint_data = await provider.create_endpoint(
                     name=endpoint_name,
-                    gpu_id=candidate_id,
+                    gpu_ids=full_ids, # Pass a list of all GPU IDs
                     image=settings.docker_image,
                     env=env,
                     api_key=user_runpod_key,
-                    # Runpod specific kwargs
                     template_id=settings.runpod_template_id,
                     workers_min=settings.runpod_workers_min,
                     workers_max=settings.runpod_workers_max,
@@ -300,15 +331,8 @@ async def orchestrate_deployment(
                     volume_in_gb=settings.runpod_volume_size_gb,
                     locations=locations,
                 )
-                gpu_id = candidate_id
-                gpu_display = candidate_display
-                break
-            except RunpodAPIError as exc:
-                last_error = exc
-                if is_capacity_error(exc.message):
-                    log_step("WARNING", f"GPU candidate unavailable: {candidate_display}", gpu_id=candidate_id)
-                    continue
-                raise
+            else:
+                raise e
 
         if endpoint_data is None:
             if last_error:
@@ -318,15 +342,18 @@ async def orchestrate_deployment(
         endpoint_id = endpoint_data["id"]
         endpoint_url = endpoint_data["url"]
         
+        # 4. Finalize
         update_deployment(
             client,
             coll,
             deployment_id,
             {
+                "status": "loading_model",
                 "runpod_endpoint_id": endpoint_id,
                 "endpoint_url": endpoint_url,
-                "gpu_allocated": gpu_display,
-                "provider": provider_name
+                "gpu_allocated": target_display,
+                "provider": provider_name,
+                "gpu_pool_targeted": target_ids,
             },
         )
         log_step(

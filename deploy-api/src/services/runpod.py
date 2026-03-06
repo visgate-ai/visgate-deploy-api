@@ -53,7 +53,7 @@ class RunpodProvider(BaseInferenceProvider):
     async def create_endpoint(
         self,
         name: str,
-        gpu_id: str,
+        gpu_ids: list[str] | str,
         image: str,
         env: dict[str, str],
         api_key: str,
@@ -69,12 +69,16 @@ class RunpodProvider(BaseInferenceProvider):
         }
         """
         
+        
         runpod_env = [{"key": k, "value": str(v)} for k, v in env.items()]
         
+        # Multi-GPU targeting support: join list into comma-separated string
+        actual_gpu_ids = ",".join(gpu_ids) if isinstance(gpu_ids, list) else gpu_ids
+
         input_obj = {
             "name": name,
             "templateId": template_id,
-            "gpuIds": gpu_id,
+            "gpuIds": actual_gpu_ids,
             "idleTimeout": kwargs.get("idle_timeout", 300),
             "executionTimeoutMs": kwargs.get("execution_timeout_ms", 300000),
             "locations": kwargs.get("locations", "US"),
