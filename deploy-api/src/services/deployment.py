@@ -82,7 +82,7 @@ def _as_endpoint_root(endpoint_url: Optional[str]) -> Optional[str]:
 
 async def _probe_runpod_readiness(endpoint_url: str, api_key: str) -> tuple[bool, Optional[str]]:
     """
-    Probe worker readiness with debug payload.
+    Probe worker readiness via the RunPod /health endpoint (GET, no job queued).
     Returns (ready, error_message).
     """
     endpoint_root = _as_endpoint_root(endpoint_url)
@@ -90,39 +90,20 @@ async def _probe_runpod_readiness(endpoint_url: str, api_key: str) -> tuple[bool
         return False, "missing endpoint url"
 
     try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            resp = await client.post(
-                f"{endpoint_root}/runsync",
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.get(
+                f"{endpoint_root}/health",
                 headers={"Authorization": f"Bearer {api_key}"},
-                json={"input": {"debug": True}},
             )
         if resp.status_code >= 400:
-            return False, f"probe http {resp.status_code}: {resp.text[:200]}"
+            return False, f"health probe http {resp.status_code}: {resp.text[:200]}"
 
         payload = resp.json()
-        job_status = str(payload.get("status", "")).upper()
-        if job_status in {"IN_QUEUE", "IN_PROGRESS"}:
-            return False, None
-        if job_status == "FAILED":
-            return False, str(payload.get("error", "RunPod job failed"))
-
-        output = payload.get("output") or {}
-        # Support fallback if structure is flat for some reason
-        if not output and "pipeline_loaded" in payload:
-            output = payload
-
-        status = str(output.get("status", "")).upper()
-        pipeline_loaded = bool(output.get("pipeline_loaded"))
-        error_text = str(output.get("error", ""))
-
-        if status == "OK" and pipeline_loaded:
+        workers = payload.get("workers") or {}
+        ready_workers = int(workers.get("ready", 0))
+        idle_workers = int(workers.get("idle", 0))
+        if ready_workers > 0 or idle_workers > 0:
             return True, None
-        if status in {"IN_QUEUE", "IN_PROGRESS", "RUNNING", "LOADING"}:
-            return False, None
-        if "still loading" in error_text.lower():
-            return False, None
-        if status == "FAILED":
-            return False, error_text or "worker reported failed status"
         return False, None
     except Exception as exc:
         return False, str(exc)
@@ -407,9 +388,9 @@ async def orchestrate_deployment(
                 log_step("WARNING", f"Failed to enqueue cache modeling task: {exc}")
 
         # Fallback readiness monitor:
-        # If worker webhook fails, probe Runpod endpoint directly and mark ready.
-        monitor_timeout_seconds = 900
-        monitor_interval_seconds = 5  # 5s: faster webhook-fallback detection
+        # If worker webhook fails, probe RunPod /health directly (GET, no job queued).
+        monitor_timeout_seconds = 1800  # 30 min — covers GPU cold-start + model download
+        monitor_interval_seconds = 15   # 15s is sufficient; /health is cheap
         started_at = asyncio.get_running_loop().time()
         while True:
             latest = get_deployment(client, coll, deployment_id)
@@ -422,9 +403,15 @@ async def orchestrate_deployment(
             elapsed = asyncio.get_running_loop().time() - started_at
             if elapsed > monitor_timeout_seconds:
                 log_step(
-                    "WARNING",
-                    "Readiness monitor timed out; waiting for worker webhook",
+                    "ERROR",
+                    "Readiness monitor timed out; marking deployment failed",
                     timeout_seconds=monitor_timeout_seconds,
+                )
+                update_deployment(
+                    client,
+                    coll,
+                    deployment_id,
+                    {"status": "failed", "error": f"Worker did not become ready within {monitor_timeout_seconds}s"},
                 )
                 return
 
