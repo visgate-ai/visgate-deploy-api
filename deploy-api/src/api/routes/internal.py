@@ -17,6 +17,7 @@ from src.services.deployment import (
 from src.services.firestore_repo import get_deployment, update_deployment
 from src.services.log_tunnel import append_live_log
 from src.services.provider_factory import get_provider
+from src.services.r2_manifest import add_model_to_manifest
 from src.services.secret_cache import get_secrets
 
 router = APIRouter(prefix="/internal", tags=["internal"])
@@ -30,6 +31,13 @@ class LiveLogPayload(BaseModel):
 class CleanupPayload(BaseModel):
     reason: str = "idle_timeout"
     runpod_api_key: Optional[str] = None  # Passed by worker; eliminates multi-instance secret_cache dependency
+
+
+class ModelCachedPayload(BaseModel):
+    """Payload for worker → /internal/model-cached callback."""
+
+    hf_model_id: str
+    deployment_id: str
 
 
 class OrchestrateTaskPayload(BaseModel):
@@ -192,5 +200,50 @@ async def cleanup_endpoint(
         await provider.delete_endpoint(doc.runpod_endpoint_id, runpod_api_key)
         update_deployment(fs_client, settings.firestore_collection_deployments, deployment_id, {"status": "deleted"})
         return {"status": "deleted"}
+    except Exception as exc:
+        return {"status": "error", "error": str(exc)}
+
+
+@router.post("/model-cached")
+async def model_cached(
+    payload: ModelCachedPayload,
+    secret: str | None = None,
+    x_visgate_secret: Annotated[
+        str | None,
+        Header(alias="X-Visgate-Internal-Secret"),
+    ] = None,
+) -> dict:
+    """
+    Called by worker after successfully uploading a model to R2.
+    Updates the R2 manifest and marks the deployment as r2_cached.
+    """
+    settings = get_settings()
+    provided_secret = x_visgate_secret or secret
+    if settings.internal_webhook_secret and provided_secret != settings.internal_webhook_secret:
+        raise HTTPException(status_code=403, detail="Invalid internal secret")
+
+    if not settings.aws_access_key_id or not settings.aws_endpoint_url:
+        return {"status": "skipped", "reason": "R2 not configured"}
+
+    try:
+        # Update manifest
+        ok = add_model_to_manifest(
+            model_id=payload.hf_model_id,
+            endpoint_url=settings.aws_endpoint_url,
+            access_key_id=settings.aws_access_key_id,
+            secret_access_key=settings.aws_secret_access_key,
+        )
+
+        # Update deployment doc
+        from src.services.firestore_repo import get_firestore_client
+        fs_client = get_firestore_client(settings.gcp_project_id)
+        update_deployment(
+            fs_client,
+            settings.firestore_collection_deployments,
+            payload.deployment_id,
+            {"r2_cached": True},
+        )
+
+        return {"status": "ok", "manifest_updated": ok}
     except Exception as exc:
         return {"status": "error", "error": str(exc)}

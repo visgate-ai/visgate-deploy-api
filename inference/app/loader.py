@@ -66,9 +66,12 @@ def sync_from_s3(s3_url: str, local_path: str) -> bool:
         return False
 
 
-def load_pipeline_optimized(model_id: str, token: str = None, device: str = "cuda") -> Any:
+def load_pipeline_optimized(model_id: str, token: str = None, device: str = "cuda") -> tuple[Any, bool]:
     """
     Load pipeline with S3 caching and persistent volume support.
+
+    Returns (pipeline, loaded_from_local) tuple.
+    loaded_from_local is True when model was synced from R2, False when downloaded from HF.
 
     Cold-start cost path:
       1. S3 cache hit  → sync skipped  → load from disk  (~2-5s)
@@ -97,4 +100,5 @@ def load_pipeline_optimized(model_id: str, token: str = None, device: str = "cud
 
     print(f"Loading pipeline from: {model_id} (local={use_local})")
     from pipelines.registry import load_pipeline
-    return load_pipeline(model_id=model_id, token=token, device=device)
+    pipeline = load_pipeline(model_id=model_id, token=token, device=device)
+    return (pipeline, use_local)

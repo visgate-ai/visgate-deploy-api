@@ -24,6 +24,10 @@ from src.services.gpu_selection import select_gpu_candidates
 from src.services.huggingface import validate_model
 from src.services.provider_factory import get_provider
 import src.services.runpod  # Trigger provider registration
+from src.services.r2_manifest import (
+    fetch_cached_model_ids,
+    model_s3_url,
+)
 from src.services.secret_cache import get_secrets
 from src.services.webhook import notify
 
@@ -206,6 +210,29 @@ async def orchestrate_deployment(
         update_deployment(client, coll, deployment_id, {"model_vram_gb": vram_gb})
         log_step("INFO", "HF model validated", hf_model_id=hf_model_id, min_gpu_memory_gb=vram_gb)
 
+        # 1.5. Check R2 model cache — if present, worker will download from R2
+        # The platform RW key lives only in the API (never sent to workers).
+        # computed_s3_model_url is set to the per-model R2 path and passed to
+        # the worker's S3_MODEL_URL so it can sync from R2 instead of HF.
+        # On cache miss: worker downloads from HF and uploads to R2 in background.
+        computed_s3_model_url: Optional[str] = None
+        upload_to_r2_after_load: bool = False
+        if settings.aws_access_key_id and settings.aws_endpoint_url and not s3_model_url:
+            per_model_url = model_s3_url(settings.s3_model_url, hf_model_id)
+            update_deployment(client, coll, deployment_id, {"status": "checking_r2_cache"})
+            log_step("INFO", "Checking R2 model cache", hf_model_id=hf_model_id)
+            cached_ids = fetch_cached_model_ids(
+                settings.aws_endpoint_url,
+                settings.aws_access_key_id,
+                settings.aws_secret_access_key,
+            )
+            if hf_model_id in cached_ids:
+                computed_s3_model_url = per_model_url
+                log_step("INFO", "R2 cache hit — worker will sync from R2", s3_url=computed_s3_model_url)
+            else:
+                log_step("INFO", "R2 cache miss — worker will download from HF and upload to R2 in background", hf_model_id=hf_model_id)
+                upload_to_r2_after_load = True
+
         # 2. Select GPU
         update_deployment(client, coll, deployment_id, {"status": "selecting_gpu"})
         registry = get_gpu_registry(client, settings.firestore_collection_gpu_registry)
@@ -249,7 +276,9 @@ async def orchestrate_deployment(
             effective_secret_key = ""
 
         effective_endpoint = aws_endpoint_url or settings.aws_endpoint_url
-        effective_s3_model_url = s3_model_url or settings.s3_model_url
+        # Use user-provided URL, or the per-model R2 URL computed from the cache check,
+        # or fall back to empty string (worker downloads from HuggingFace directly).
+        effective_s3_model_url = s3_model_url or computed_s3_model_url or ""
 
         if effective_access_key:
             env["AWS_ACCESS_KEY_ID"] = effective_access_key
@@ -276,6 +305,15 @@ async def orchestrate_deployment(
             env["CLEANUP_FAILURE_THRESHOLD"] = str(settings.cleanup_failure_threshold)
         if internal_base:
             env["VISGATE_LOG_TUNNEL"] = f"{internal_base}/internal/logs/{deployment_id}"
+
+        # R2 upload credentials (cache write-back after HF download on cache miss)
+        # On cache miss: inject RW keys for upload (replaces read-only keys)
+        if upload_to_r2_after_load and settings.aws_access_key_id:
+            per_model_r2_path = model_s3_url(settings.s3_model_url, hf_model_id)
+            env["AWS_ACCESS_KEY_ID"] = settings.aws_access_key_id
+            env["AWS_SECRET_ACCESS_KEY"] = settings.aws_secret_access_key
+            env["VISGATE_R2_UPLOAD_PATH"] = per_model_r2_path
+            log_step("INFO", "Worker will upload model to R2 after load", r2_path=per_model_r2_path)
 
         # Common data for all providers
         endpoint_name = doc.endpoint_name or f"visgate-{deployment_id}"
