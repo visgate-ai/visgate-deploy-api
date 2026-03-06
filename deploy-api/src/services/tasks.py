@@ -3,6 +3,7 @@
 import asyncio
 import hashlib
 import json
+import time
 from typing import Any
 
 from google.api_core.exceptions import AlreadyExists
@@ -47,7 +48,11 @@ def _store_task_secrets(deployment_id: str, project_id: str, secrets: dict[str, 
 
 def _cache_task_name(queue_path: str, hf_model_id: str) -> str:
     digest = hashlib.sha256(hf_model_id.encode("utf-8")).hexdigest()[:16]
-    return f"{queue_path}/tasks/cache-model-{digest}"
+    # Include 1-hour epoch window so tombstoned tasks (from failed runs) don't
+    # block retries after the hour rolls over. The manifest check in the handler
+    # is the real dedup guard against redundant uploads.
+    window = int(time.time()) // 3600
+    return f"{queue_path}/tasks/cache-model-{digest}-{window}"
 
 
 async def enqueue_orchestration_task(
