@@ -242,6 +242,24 @@ class Settings(BaseSettings):
     log_stream_ttl_seconds: int = Field(default=3600, ge=60, le=86400)
     cleanup_idle_timeout_seconds: int = Field(default=900, ge=60, le=7200)
     cleanup_failure_threshold: int = Field(default=3, ge=1, le=10)
+    cache_manifest_ttl_seconds: int = Field(
+        default=600,
+        ge=0,
+        le=3600,
+        description="In-memory TTL for the R2 manifest cache to reduce repeated object reads.",
+    )
+    cache_model_task_timeout_seconds: int = Field(
+        default=3600,
+        ge=60,
+        le=7200,
+        description="Maximum allowed runtime for a single cache-model task attempt.",
+    )
+    cache_model_task_max_retries: int = Field(
+        default=3,
+        ge=1,
+        le=10,
+        description="Maximum retry attempts for cache-model tasks before surfacing failure to Cloud Tasks.",
+    )
 
     @field_validator("log_level", mode="before")
     @classmethod

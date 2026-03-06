@@ -27,7 +27,6 @@ from app.config import (
     CDN_BASE_URL,
     RETURN_BASE64,
     RUNPOD_API_KEY,
-    VISGATE_R2_UPLOAD_PATH,
 )
 from app.loader import load_pipeline_optimized as load_pipeline
 
@@ -37,7 +36,6 @@ _pipeline: Optional[Any] = None
 _load_error: Optional[str] = None
 _last_request_at: float = 0.0
 _failure_count: int = 0
-_model_local_path: Optional[str] = None  # Track local path for upload
 
 
 def _mask_sensitive(text: str) -> str:
@@ -159,53 +157,8 @@ def _notify_orchestrator(status: str, message: str | None = None) -> None:
     print("[worker] ERROR: Failed to notify orchestrator after retries", flush=True)
 
 
-def _upload_model_to_r2_background() -> None:
-    """Upload model to R2 in background after pipeline is loaded from HF."""
-    if not VISGATE_R2_UPLOAD_PATH or not _model_local_path:
-        return
-
-    # AWS credentials must be in environment (injected by orchestrator on cache miss)
-    aws_key = os.environ.get("AWS_ACCESS_KEY_ID")
-    if not aws_key:
-        print("[worker] No AWS credentials for R2 upload, skipping", flush=True)
-        return
-
-    print("[worker] Starting R2 upload in background...", flush=True)
-    _log_tunnel("INFO", "Starting R2 model upload")
-
-    try:
-        import subprocess
-        # Check if s5cmd is available
-        try:
-            subprocess.run(["s5cmd", "version"], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        except Exception:
-            print("[worker] s5cmd not found, skipping R2 upload", flush=True)
-            return
-
-        cmd = ["s5cmd", "--numworkers", "50"]
-        endpoint = os.environ.get("AWS_ENDPOINT_URL")
-        if endpoint:
-            cmd.extend(["--endpoint-url", endpoint])
-        cmd.extend(["cp", f"{_model_local_path}/*", VISGATE_R2_UPLOAD_PATH + "/"])
-
-        print(f"[worker] Uploading to {VISGATE_R2_UPLOAD_PATH}...", flush=True)
-        subprocess.run(cmd, check=True)
-        print("[worker] R2 upload complete", flush=True)
-        _log_tunnel("INFO", "R2 model upload complete")
-
-        # Notify API to update manifest
-        if VISGATE_WEBHOOK:
-            callback_url = VISGATE_WEBHOOK.replace("/deployment-ready/", "/model-cached")
-            _post_json(callback_url, {"hf_model_id": HF_MODEL_ID, "deployment_id": VISGATE_DEPLOYMENT_ID})
-            print("[worker] Notified API of R2 cache completion", flush=True)
-
-    except Exception as e:
-        print(f"[worker] R2 upload failed (non-critical): {e}", flush=True)
-        _log_tunnel("WARNING", f"R2 upload failed: {e}")
-
-
 def _load_model_background() -> None:
-    global _pipeline, _load_error, _model_local_path
+    global _pipeline, _load_error
     if not HF_MODEL_ID or not HF_MODEL_ID.strip():
         _load_error = "HF_MODEL_ID environment variable is required"
         print(f"[worker] ERROR: {_load_error}", flush=True)
@@ -215,21 +168,9 @@ def _load_model_background() -> None:
     _log_tunnel("INFO", f"Loading model: {HF_MODEL_ID}")
     try:
         _notify_orchestrator("loading_model", "Model loading started")
-        _pipeline, loaded_from_r2 = load_pipeline(model_id=HF_MODEL_ID, token=HF_TOKEN, device=DEVICE)
-
-        # Track local path for potential upload
-        if not loaded_from_r2:
-            volume_path = "/runpod-volume"
-            model_slug = HF_MODEL_ID.replace("/", "--")
-            _model_local_path = os.path.join(volume_path, model_slug)
-
+        _pipeline, _ = load_pipeline(model_id=HF_MODEL_ID, token=HF_TOKEN, device=DEVICE)
         print("[worker] Model loaded successfully", flush=True)
         _log_tunnel("INFO", "Model loaded successfully")
-
-        # Start R2 upload in background if model was downloaded from HF
-        if not loaded_from_r2 and VISGATE_R2_UPLOAD_PATH:
-            threading.Thread(target=_upload_model_to_r2_background, daemon=True).start()
-
         # Notify orchestrator
         _notify_orchestrator("ready", "Model loaded successfully")
     except Exception as e:

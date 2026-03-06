@@ -55,6 +55,7 @@ def structured_log(
     metadata: Optional[dict[str, Any]] = None,
     error: Optional[dict[str, Any]] = None,
     logger: Optional[logging.Logger] = None,
+    **extra_metadata: Any,
 ) -> None:
     """Emit a structured log entry for Cloud Logging."""
     log = logging.getLogger(logger.name if logger else __name__)
@@ -74,8 +75,13 @@ def structured_log(
         payload["operation"] = operation
     if duration_ms is not None:
         payload["duration_ms"] = round(duration_ms, 2)
+    merged_metadata: dict[str, Any] = {}
     if metadata:
-        payload["metadata"] = _redact_dict(metadata)
+        merged_metadata.update(metadata)
+    if extra_metadata:
+        merged_metadata.update(extra_metadata)
+    if merged_metadata:
+        payload["metadata"] = _redact_dict(merged_metadata)
     if error:
         payload["error"] = _redact_dict(error)
 

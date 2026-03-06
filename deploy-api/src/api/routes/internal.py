@@ -2,12 +2,16 @@
 
 import asyncio
 import json
+import os
+import tempfile
+import time
 from typing import Annotated, Optional
 
 from fastapi import APIRouter, Header, HTTPException
 from pydantic import BaseModel
 
 from src.core.config import get_settings
+from src.core.logging import structured_log
 from src.models.schemas import DeploymentReadyPayload
 from src.services.deployment import (
     mark_deployment_ready_and_notify,
@@ -17,7 +21,7 @@ from src.services.deployment import (
 from src.services.firestore_repo import get_deployment, update_deployment
 from src.services.log_tunnel import append_live_log
 from src.services.provider_factory import get_provider
-from src.services.r2_manifest import add_model_to_manifest
+from src.services.r2_manifest import add_model_to_manifest, fetch_cached_model_ids, model_s3_url
 from src.services.secret_cache import get_secrets
 
 router = APIRouter(prefix="/internal", tags=["internal"])
@@ -38,6 +42,90 @@ class ModelCachedPayload(BaseModel):
 
     hf_model_id: str
     deployment_id: str
+
+
+class CacheModelPayload(BaseModel):
+    """Payload for Cloud Tasks → /internal/tasks/cache-model."""
+
+    hf_model_id: str
+    hf_token: str = ""
+
+
+_CACHE_IGNORE_PATTERNS = ["*.msgpack", "*.h5", "flax_model*", "rust_model.ot", "tf_model*"]
+
+
+def _task_log(level: str, message: str, **metadata: object) -> None:
+    structured_log(level, message, operation="r2.cache_model", metadata=metadata)
+
+
+def _upload_directory_to_r2(tmpdir: str, hf_model_id: str) -> int:
+    import boto3
+
+    settings = get_settings()
+    model_slug = hf_model_id.replace("/", "--")
+    s3_prefix = f"models/{model_slug}"
+    s3 = boto3.client(
+        "s3",
+        endpoint_url=settings.aws_endpoint_url,
+        aws_access_key_id=settings.aws_access_key_id,
+        aws_secret_access_key=settings.aws_secret_access_key,
+        region_name="auto",
+    )
+
+    file_count = 0
+    for dirpath, _, filenames in os.walk(tmpdir):
+        for filename in filenames:
+            if filename.startswith("."):
+                continue
+            local_file = os.path.join(dirpath, filename)
+            rel_path = os.path.relpath(local_file, tmpdir)
+            s3_key = f"{s3_prefix}/{rel_path}"
+            s3.upload_file(local_file, "visgate-models", s3_key)
+            file_count += 1
+    return file_count
+
+
+def _cache_model_once(hf_model_id: str, hf_token: str | None) -> dict[str, object]:
+    from huggingface_hub import snapshot_download
+
+    settings = get_settings()
+
+    cached_ids = fetch_cached_model_ids(
+        endpoint_url=settings.aws_endpoint_url,
+        access_key_id=settings.aws_access_key_id,
+        secret_access_key=settings.aws_secret_access_key,
+        force_refresh=True,
+    )
+    if hf_model_id in cached_ids:
+        return {"status": "already_cached", "files_uploaded": 0, "manifest_updated": True}
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        snapshot_download(
+            repo_id=hf_model_id,
+            token=hf_token,
+            local_dir=tmpdir,
+            ignore_patterns=_CACHE_IGNORE_PATTERNS,
+        )
+
+        cached_ids = fetch_cached_model_ids(
+            endpoint_url=settings.aws_endpoint_url,
+            access_key_id=settings.aws_access_key_id,
+            secret_access_key=settings.aws_secret_access_key,
+            force_refresh=True,
+        )
+        if hf_model_id in cached_ids:
+            return {"status": "already_cached", "files_uploaded": 0, "manifest_updated": True}
+
+        file_count = _upload_directory_to_r2(tmpdir, hf_model_id)
+        manifest_updated = add_model_to_manifest(
+            model_id=hf_model_id,
+            endpoint_url=settings.aws_endpoint_url,
+            access_key_id=settings.aws_access_key_id,
+            secret_access_key=settings.aws_secret_access_key,
+        )
+        if not manifest_updated:
+            raise RuntimeError("manifest update failed after model upload")
+        return {"status": "ok", "files_uploaded": file_count, "manifest_updated": True}
 
 
 class OrchestrateTaskPayload(BaseModel):
@@ -99,7 +187,106 @@ async def run_orchestration_task(
     return {"status": "accepted", "deployment_id": payload.deployment_id}
 
 
-@router.post("/deployment-ready/{deployment_id}")
+@router.post("/tasks/cache-model")
+async def task_cache_model(
+    payload: CacheModelPayload,
+    x_visgate_secret: Annotated[
+        str | None,
+        Header(alias="X-Visgate-Internal-Secret"),
+    ] = None,
+    x_cloudtasks_taskname: Annotated[
+        str | None,
+        Header(alias="X-CloudTasks-TaskName"),
+    ] = None,
+    x_cloudtasks_taskretrycount: Annotated[
+        str | None,
+        Header(alias="X-CloudTasks-TaskRetryCount"),
+    ] = None,
+) -> dict:
+    """
+    Cloud Tasks target: download HF model to temp dir, upload all files to R2, update manifest.
+    Runs independently as a background job.
+    """
+    settings = get_settings()
+
+    if settings.internal_webhook_secret and x_visgate_secret != settings.internal_webhook_secret:
+        raise HTTPException(status_code=403, detail="Invalid internal secret")
+
+    if not settings.aws_access_key_id or not settings.aws_endpoint_url:
+        return {"status": "skipped", "reason": "R2 not configured"}
+
+    hf_model_id = payload.hf_model_id
+    hf_token = payload.hf_token or None
+    task_name = x_cloudtasks_taskname or "manual"
+    retry_count = int(x_cloudtasks_taskretrycount or "0")
+    started_at = time.perf_counter()
+    r2_path = model_s3_url(settings.s3_model_url, hf_model_id)
+
+    _task_log(
+        "INFO",
+        "Cache-model task started",
+        hf_model_id=hf_model_id,
+        task_name=task_name,
+        retry_count=retry_count,
+        r2_path=r2_path,
+    )
+
+    last_error: Exception | None = None
+    for attempt in range(1, settings.cache_model_task_max_retries + 1):
+        attempt_started = time.perf_counter()
+        try:
+            result = await asyncio.wait_for(
+                asyncio.to_thread(_cache_model_once, hf_model_id, hf_token),
+                timeout=settings.cache_model_task_timeout_seconds,
+            )
+            duration_ms = (time.perf_counter() - started_at) * 1000
+            _task_log(
+                "INFO",
+                "Cache-model task completed",
+                hf_model_id=hf_model_id,
+                task_name=task_name,
+                retry_count=retry_count,
+                attempt=attempt,
+                files_uploaded=result.get("files_uploaded", 0),
+                status=result.get("status", "ok"),
+                duration_ms=round(duration_ms, 2),
+            )
+            return {
+                "status": result.get("status", "ok"),
+                "files_uploaded": result.get("files_uploaded", 0),
+                "manifest_updated": result.get("manifest_updated", True),
+                "task_name": task_name,
+                "attempt": attempt,
+            }
+        except Exception as exc:  # noqa: BLE001
+            last_error = exc
+            attempt_duration_ms = (time.perf_counter() - attempt_started) * 1000
+            _task_log(
+                "WARNING",
+                "Cache-model attempt failed",
+                hf_model_id=hf_model_id,
+                task_name=task_name,
+                retry_count=retry_count,
+                attempt=attempt,
+                max_attempts=settings.cache_model_task_max_retries,
+                duration_ms=round(attempt_duration_ms, 2),
+                error_type=type(exc).__name__,
+                error_message=str(exc),
+            )
+            if attempt >= settings.cache_model_task_max_retries:
+                break
+            await asyncio.sleep(min(2 ** (attempt - 1), 8))
+
+    raise HTTPException(
+        status_code=500,
+        detail={
+            "status": "error",
+            "hf_model_id": hf_model_id,
+            "task_name": task_name,
+            "error": str(last_error) if last_error else "unknown cache-model failure",
+        },
+    )
+
 async def deployment_ready(
     deployment_id: str,
     payload: DeploymentReadyPayload | None = None,

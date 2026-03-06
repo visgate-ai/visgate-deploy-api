@@ -5,6 +5,7 @@ import json
 import os
 
 import pytest
+from google.api_core.exceptions import AlreadyExists
 from fastapi.testclient import TestClient
 from unittest.mock import AsyncMock, MagicMock, patch, call
 
@@ -194,6 +195,57 @@ async def test_enqueue_falls_back_to_asyncio_on_cloud_tasks_error(mock_orch, moc
     # Should not raise; asyncio fallback used
     mock_create_task.assert_called_once()
     get_settings.cache_clear()
+
+
+@patch("google.cloud.tasks_v2.CloudTasksClient")
+async def test_enqueue_cache_model_task_uses_deduped_task_name(mock_tasks_cls, monkeypatch):
+    """Cache-model tasks use a deterministic Cloud Tasks name to avoid duplicate uploads."""
+    from src.core.config import get_settings
+    import src.services.tasks as tasks_mod
+
+    monkeypatch.setenv("CLOUD_TASKS_QUEUE_PATH", "projects/visgate/locations/us-central1/queues/q")
+    monkeypatch.setenv("INTERNAL_WEBHOOK_BASE_URL", "https://service.run.app")
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "rw_key")
+    get_settings.cache_clear()
+
+    mock_client = MagicMock()
+    mock_client.create_task.return_value = MagicMock(name="projects/visgate/.../tasks/cache-model")
+    mock_tasks_cls.return_value = mock_client
+
+    await tasks_mod.enqueue_cache_model_task("black-forest-labs/FLUX.1-schnell", "hf_token")
+
+    task = mock_client.create_task.call_args.kwargs["request"]["task"]
+    assert task["name"] == tasks_mod._cache_task_name(
+        "projects/visgate/locations/us-central1/queues/q",
+        "black-forest-labs/FLUX.1-schnell",
+    )
+    assert json.loads(task["http_request"]["body"]) == {
+        "hf_model_id": "black-forest-labs/FLUX.1-schnell",
+        "hf_token": "hf_token",
+    }
+    get_settings.cache_clear()
+
+
+@patch("google.cloud.tasks_v2.CloudTasksClient")
+async def test_enqueue_cache_model_task_ignores_already_exists(mock_tasks_cls, monkeypatch):
+    """Duplicate cache-model tasks are ignored when Cloud Tasks reports an existing task."""
+    from src.core.config import get_settings
+    import src.services.tasks as tasks_mod
+
+    monkeypatch.setenv("CLOUD_TASKS_QUEUE_PATH", "projects/visgate/locations/us-central1/queues/q")
+    monkeypatch.setenv("INTERNAL_WEBHOOK_BASE_URL", "https://service.run.app")
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "rw_key")
+    get_settings.cache_clear()
+
+    mock_client = MagicMock()
+    mock_client.create_task.side_effect = AlreadyExists("task exists")
+    mock_tasks_cls.return_value = mock_client
+
+    await tasks_mod.enqueue_cache_model_task("black-forest-labs/FLUX.1-schnell")
+
+    mock_client.create_task.assert_called_once()
+    get_settings.cache_clear()
+
 
 
 # ---------------------------------------------------------------------------

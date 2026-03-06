@@ -41,6 +41,3 @@ OUTPUT_S3_URL: Optional[str] = get_env("OUTPUT_S3_URL")
 CDN_BASE_URL: Optional[str] = get_env("CDN_BASE_URL")
 RETURN_BASE64: str = get_env("RETURN_BASE64", "true") or "true"
 
-# R2 upload (cache write-back after HF download on cache miss)
-VISGATE_R2_UPLOAD_PATH: Optional[str] = get_env("VISGATE_R2_UPLOAD_PATH")
-

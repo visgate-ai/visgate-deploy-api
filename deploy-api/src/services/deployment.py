@@ -214,9 +214,9 @@ async def orchestrate_deployment(
         # The platform RW key lives only in the API (never sent to workers).
         # computed_s3_model_url is set to the per-model R2 path and passed to
         # the worker's S3_MODEL_URL so it can sync from R2 instead of HF.
-        # On cache miss: worker downloads from HF and uploads to R2 in background.
+        # On cache miss: separate Cloud Task will download from HF and upload to R2.
         computed_s3_model_url: Optional[str] = None
-        upload_to_r2_after_load: bool = False
+        trigger_cache_model_task: bool = False
         if settings.aws_access_key_id and settings.aws_endpoint_url and not s3_model_url:
             per_model_url = model_s3_url(settings.s3_model_url, hf_model_id)
             update_deployment(client, coll, deployment_id, {"status": "checking_r2_cache"})
@@ -230,8 +230,8 @@ async def orchestrate_deployment(
                 computed_s3_model_url = per_model_url
                 log_step("INFO", "R2 cache hit — worker will sync from R2", s3_url=computed_s3_model_url)
             else:
-                log_step("INFO", "R2 cache miss — worker will download from HF and upload to R2 in background", hf_model_id=hf_model_id)
-                upload_to_r2_after_load = True
+                log_step("INFO", "R2 cache miss — separate job will download and cache", hf_model_id=hf_model_id)
+                trigger_cache_model_task = True
 
         # 2. Select GPU
         update_deployment(client, coll, deployment_id, {"status": "selecting_gpu"})
@@ -268,7 +268,7 @@ async def orchestrate_deployment(
             effective_access_key = aws_access_key_id
             effective_secret_key = aws_secret_access_key or ""
         elif settings.r2_access_key_id_r:
-            # Platform shared cache — read-only key
+            # Platform shared cache — read-only key only
             effective_access_key = settings.r2_access_key_id_r
             effective_secret_key = settings.r2_secret_access_key_r
         else:
@@ -305,15 +305,6 @@ async def orchestrate_deployment(
             env["CLEANUP_FAILURE_THRESHOLD"] = str(settings.cleanup_failure_threshold)
         if internal_base:
             env["VISGATE_LOG_TUNNEL"] = f"{internal_base}/internal/logs/{deployment_id}"
-
-        # R2 upload credentials (cache write-back after HF download on cache miss)
-        # On cache miss: inject RW keys for upload (replaces read-only keys)
-        if upload_to_r2_after_load and settings.aws_access_key_id:
-            per_model_r2_path = model_s3_url(settings.s3_model_url, hf_model_id)
-            env["AWS_ACCESS_KEY_ID"] = settings.aws_access_key_id
-            env["AWS_SECRET_ACCESS_KEY"] = settings.aws_secret_access_key
-            env["VISGATE_R2_UPLOAD_PATH"] = per_model_r2_path
-            log_step("INFO", "Worker will upload model to R2 after load", r2_path=per_model_r2_path)
 
         # Common data for all providers
         endpoint_name = doc.endpoint_name or f"visgate-{deployment_id}"
@@ -402,6 +393,18 @@ async def orchestrate_deployment(
         )
         update_deployment(client, coll, deployment_id, {"status": "loading_model"})
         log_step("INFO", "Waiting for model load signal from worker")
+
+        # Trigger background cache modeling job if needed (runs independently)
+        if trigger_cache_model_task:
+            try:
+                from src.services.tasks import enqueue_cache_model_task
+                await enqueue_cache_model_task(
+                    hf_model_id=hf_model_id,
+                    hf_token=hf_token,
+                )
+                log_step("INFO", "Enqueued background cache modeling task")
+            except Exception as exc:
+                log_step("WARNING", f"Failed to enqueue cache modeling task: {exc}")
 
         # Fallback readiness monitor:
         # If worker webhook fails, probe Runpod endpoint directly and mark ready.

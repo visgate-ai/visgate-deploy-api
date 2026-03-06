@@ -1,9 +1,11 @@
 """Google Cloud Tasks integration for background processing."""
 
 import asyncio
+import hashlib
 import json
 from typing import Any
 
+from google.api_core.exceptions import AlreadyExists
 from google.cloud import tasks_v2
 from src.core.config import get_settings
 from src.core.logging import structured_log
@@ -41,6 +43,11 @@ def _store_task_secrets(deployment_id: str, project_id: str, secrets: dict[str, 
         request={"parent": secret_path, "payload": {"data": json.dumps(secrets).encode()}}
     )
     return secret_id
+
+
+def _cache_task_name(queue_path: str, hf_model_id: str) -> str:
+    digest = hashlib.sha256(hf_model_id.encode("utf-8")).hexdigest()[:16]
+    return f"{queue_path}/tasks/cache-model-{digest}"
 
 
 async def enqueue_orchestration_task(
@@ -176,3 +183,82 @@ async def enqueue_orchestration_task(
             )
         )
 
+
+async def enqueue_cache_model_task(
+    hf_model_id: str,
+    hf_token: str | None = None,
+) -> None:
+    """
+    Enqueue a background task to download HF model and cache it to R2.
+    Runs independently of deployment orchestration.
+    """
+    settings = get_settings()
+    queue_path = settings.cloud_tasks_queue_path
+
+    if not queue_path or not settings.aws_access_key_id:
+        structured_log(
+            "WARNING",
+            "Cache modeling skipped: no Cloud Tasks queue or R2 credentials configured",
+            hf_model_id=hf_model_id,
+        )
+        return
+
+    base_url = settings.internal_webhook_base_url
+    if not base_url:
+        structured_log(
+            "WARNING",
+            "Cache modeling skipped: INTERNAL_WEBHOOK_BASE_URL not set",
+            hf_model_id=hf_model_id,
+        )
+        return
+
+    url = f"{base_url}/internal/tasks/cache-model"
+    payload = {"hf_model_id": hf_model_id, "hf_token": hf_token or ""}
+
+    http_request: dict[str, Any] = {
+        "http_method": tasks_v2.HttpMethod.POST,
+        "url": url,
+        "headers": {"Content-Type": "application/json"},
+        "body": json.dumps(payload).encode(),
+    }
+
+    if settings.internal_webhook_secret:
+        http_request["headers"]["X-Visgate-Internal-Secret"] = settings.internal_webhook_secret
+
+    if settings.cloud_tasks_service_account:
+        http_request["oidc_token"] = {
+            "service_account_email": settings.cloud_tasks_service_account,
+            "audience": base_url,
+        }
+
+    try:
+        client = tasks_v2.CloudTasksClient()
+        response = client.create_task(
+            request={
+                "parent": queue_path,
+                "task": {
+                    "name": _cache_task_name(queue_path, hf_model_id),
+                    "http_request": http_request,
+                },
+            }
+        )
+        structured_log(
+            "INFO",
+            "Enqueued cache modeling task",
+            hf_model_id=hf_model_id,
+            metadata={"task_name": response.name},
+        )
+    except AlreadyExists:
+        structured_log(
+            "INFO",
+            "Cache modeling task already queued or recently executed",
+            hf_model_id=hf_model_id,
+            operation="r2.cache_model.enqueue",
+        )
+    except Exception as e:
+        structured_log(
+            "WARNING",
+            f"Failed to enqueue cache modeling task: {e}",
+            hf_model_id=hf_model_id,
+            error={"message": str(e)},
+        )
