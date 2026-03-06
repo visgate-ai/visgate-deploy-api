@@ -94,7 +94,7 @@ class RunpodProvider(BaseInferenceProvider):
             input_obj["volumeMountPath"] = kwargs.get("volume_mount_path", "/runpod-volume")
 
         with span("runpod.create_endpoint", {"name": name}):
-            structured_log("INFO", "Runpod create_endpoint requested", metadata={"name": name, "gpu_id": gpu_id})
+            structured_log("INFO", "Runpod create_endpoint requested", metadata={"name": name, "gpu_ids": actual_gpu_ids})
             data = await self._graphql_request(api_key, mutation, {"input": input_obj})
             result = data.get("saveEndpoint")
             if not result:
