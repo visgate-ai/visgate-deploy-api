@@ -313,8 +313,9 @@ async def create_deployment(
 
     model_path = model_slug(hf_model_id)
     s3_model_url = None
-    if cache_scope == "shared" and settings.s3_model_url:
-        s3_model_url = _build_s3_model_url(settings.s3_model_url, model_path)
+    # For cache_scope=shared: do NOT pre-build s3_model_url here.
+    # orchestrate_deployment will query the R2 manifest and set computed_s3_model_url
+    # on a cache hit, or enqueue the cache_model background task on a miss.
     if cache_scope == "private" and private_s3_url:
         s3_model_url = _build_s3_model_url(private_s3_url, f"{ctx.user_hash}/{model_path}")
 
