@@ -134,11 +134,15 @@ def _maybe_upload_output(image_base64: str, job: dict[str, Any], job_input: dict
             tmp.write(raw_bytes)
             tmp_path = tmp.name
         env = os.environ.copy()
+        cmd = ["s5cmd"]
         if s3_config:
             env["AWS_ACCESS_KEY_ID"] = s3_config.get("accessId", "")
             env["AWS_SECRET_ACCESS_KEY"] = s3_config.get("accessSecret", "")
             env["AWS_ENDPOINT_URL"] = s3_config.get("endpointUrl", "")
-        subprocess.run(["s5cmd", "cp", tmp_path, upload_target], check=True, env=env)
+            if s3_config.get("endpointUrl"):
+                cmd.extend(["--endpoint-url", s3_config["endpointUrl"]])
+        cmd.extend(["cp", tmp_path, upload_target])
+        subprocess.run(cmd, check=True, env=env)
         url = object_url or upload_target
         if CDN_BASE_URL and object_key:
             url = f"{CDN_BASE_URL.rstrip('/')}/{object_key}"
