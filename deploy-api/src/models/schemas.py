@@ -1,9 +1,11 @@
 """Pydantic request/response models for API and internal webhooks."""
 
 from datetime import datetime
-from typing import Literal
+from typing import Any, Literal
 
-from pydantic import BaseModel, Field, HttpUrl
+from pydantic import BaseModel, Field, HttpUrl, field_validator
+
+from src.core.tasks import is_known_task, normalize_task
 
 
 # --- Request ---
@@ -12,12 +14,12 @@ class DeploymentCreate(BaseModel):
 
     hf_model_id: str = Field(..., min_length=1, max_length=256, description="Hugging Face model ID, e.g. 'black-forest-labs/FLUX.1-schnell'. See GET /v1/models for supported models.")
     user_runpod_key: str | None = Field(default=None, min_length=1, description="RunPod API key. If omitted, the Authorization Bearer token is used. Providing it here takes precedence.")
-    user_webhook_url: HttpUrl = Field(..., description="URL to notify when deployment is ready")
+    user_webhook_url: HttpUrl | None = Field(default=None, description="Optional URL to notify when deployment is ready")
     gpu_tier: str | None = Field(default=None, max_length=64, description="e.g. A40; auto-select if omitted")
     hf_token: str | None = Field(default=None, description="Optional HF token for gated models")
     region: str | None = Field(default=None, max_length=32, description="Preferred Runpod region/location")
-    task: Literal["text2img", "image2img", "text2video"] | None = Field(
-        default="text2img",
+    task: str | None = Field(
+        default="text_to_image",
         description="Intended task for compatibility checks",
     )
     cache_scope: Literal["off", "shared", "private"] | None = Field(
@@ -40,6 +42,14 @@ class DeploymentCreate(BaseModel):
         default=None,
         description="Private cache endpoint URL (cache_scope=private)",
     )
+
+    @field_validator("task", mode="before")
+    @classmethod
+    def normalize_task_field(cls, value: str | None) -> str | None:
+        normalized = normalize_task(value)
+        if normalized and not is_known_task(normalized):
+            raise ValueError("Unsupported task")
+        return normalized
 
 
 # --- Response ---
@@ -68,6 +78,8 @@ class LogEntrySchema(BaseModel):
 
 
 DeploymentStatus = Literal[
+    "accepted_cold",
+    "warm_ready",
     "validating",
     "selecting_gpu",
     "creating_endpoint",
@@ -187,3 +199,115 @@ class DeploymentReadyPayload(BaseModel):
     status: Literal["downloading_model", "loading_model", "ready", "failed"] = "ready"
     message: str | None = None
     endpoint_url: str | None = None
+
+
+InferenceJobStatus = Literal[
+    "queued",
+    "running",
+    "completed",
+    "failed",
+    "cancelled",
+    "expired",
+]
+
+
+class InferencePolicy(BaseModel):
+    execution_timeout_ms: int | None = Field(default=None, ge=5000, le=604800000)
+    ttl_ms: int | None = Field(default=None, ge=10000, le=604800000)
+    low_priority: bool = False
+
+
+class InferenceS3Config(BaseModel):
+    accessId: str = Field(..., min_length=1)
+    accessSecret: str = Field(..., min_length=1)
+    bucketName: str = Field(..., min_length=1)
+    endpointUrl: str = Field(..., min_length=1)
+    keyPrefix: str | None = Field(default=None, min_length=1)
+
+
+class InferenceOutputDestination(BaseModel):
+    bucket_name: str
+    endpoint_url: str
+    key_prefix: str | None = None
+
+
+class InferenceArtifactMetadata(BaseModel):
+    bucket_name: str | None = None
+    endpoint_url: str | None = None
+    key: str | None = None
+    url: str | None = None
+    content_type: str | None = None
+    bytes: int | None = None
+
+
+class InferenceJobMetrics(BaseModel):
+    queue_ms: int | None = None
+    execution_ms: int | None = None
+    wall_clock_ms: int | None = None
+
+
+class InferenceJobCreate(BaseModel):
+    deployment_id: str = Field(..., min_length=1)
+    task: str | None = Field(default=None, description="Optional task override; normalized to canonical task names")
+    input: dict[str, Any] = Field(default_factory=dict)
+    user_webhook_url: HttpUrl | None = Field(default=None, description="Optional user webhook for job completion notifications")
+    policy: InferencePolicy | None = None
+    s3_config: InferenceS3Config = Field(..., alias="s3Config")
+
+    @field_validator("task", mode="before")
+    @classmethod
+    def normalize_job_task(cls, value: str | None) -> str | None:
+        normalized = normalize_task(value)
+        if normalized and not is_known_task(normalized):
+            raise ValueError("Unsupported task")
+        return normalized
+
+
+class InferenceJobResponse(BaseModel):
+    job_id: str
+    deployment_id: str
+    provider: str
+    provider_job_id: str | None = None
+    task: str | None = None
+    status: InferenceJobStatus
+    provider_status: str | None = None
+    endpoint_url: str | None = None
+    input: dict[str, Any] = Field(default_factory=dict)
+    output_destination: InferenceOutputDestination | None = None
+    artifact: InferenceArtifactMetadata | None = None
+    metrics: InferenceJobMetrics | None = None
+    estimated_cost_usd: float | None = None
+    output: Any = None
+    output_preview: Any = None
+    error: Any = None
+    progress: Any = None
+    created_at: datetime
+    updated_at: datetime
+    completed_at: datetime | None = None
+    user_webhook_url: HttpUrl | None = None
+
+
+class InferenceJobAcceptedResponse(BaseModel):
+    job_id: str
+    deployment_id: str
+    provider: str
+    provider_job_id: str
+    status: InferenceJobStatus = "queued"
+    provider_status: str
+    output_destination: InferenceOutputDestination
+    created_at: datetime
+
+
+class InferenceJobListResponse(BaseModel):
+    jobs: list[InferenceJobResponse]
+    total: int
+
+
+class InferenceJobWebhookPayload(BaseModel):
+    id: str | None = None
+    status: str | None = None
+    output: Any = None
+    error: Any = None
+    delayTime: int | None = None
+    executionTime: int | None = None
+

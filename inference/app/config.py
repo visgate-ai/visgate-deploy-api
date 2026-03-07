@@ -40,4 +40,5 @@ DEFAULT_GUIDANCE_SCALE: float = 3.5
 OUTPUT_S3_URL: Optional[str] = get_env("OUTPUT_S3_URL")
 CDN_BASE_URL: Optional[str] = get_env("CDN_BASE_URL")
 RETURN_BASE64: str = get_env("RETURN_BASE64", "true") or "true"
+DEFAULT_OUTPUT_KEY_PREFIX: str = get_env("DEFAULT_OUTPUT_KEY_PREFIX", "visgate/jobs") or "visgate/jobs"
 

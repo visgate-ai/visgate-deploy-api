@@ -6,6 +6,7 @@ import os
 import sys
 import threading
 import time
+import uuid
 from typing import Any, Optional
 
 # Add project root for imports
@@ -26,6 +27,7 @@ from app.config import (
     OUTPUT_S3_URL,
     CDN_BASE_URL,
     RETURN_BASE64,
+    DEFAULT_OUTPUT_KEY_PREFIX,
     RUNPOD_API_KEY,
 )
 from app.loader import load_pipeline_optimized as load_pipeline
@@ -84,9 +86,34 @@ def _request_cleanup(reason: str) -> None:
         return
 
 
-def _maybe_upload_output(image_base64: str) -> Optional[str]:
-    """Upload base64 output to S3 via s5cmd and return CDN URL if configured."""
-    if not OUTPUT_S3_URL:
+def _job_s3_config(job: dict[str, Any], job_input: dict[str, Any]) -> dict[str, Any] | None:
+    raw = job.get("s3Config") or job_input.get("s3Config")
+    if not isinstance(raw, dict) or not raw:
+        return None
+    return raw
+
+
+def _artifact_target(s3_config: dict[str, Any] | None) -> tuple[str | None, str | None, str | None, str | None]:
+    if s3_config:
+        bucket_name = s3_config.get("bucketName")
+        endpoint_url = s3_config.get("endpointUrl")
+        if not bucket_name or not endpoint_url:
+            return None, None, None, None
+        key_prefix = (s3_config.get("keyPrefix") or DEFAULT_OUTPUT_KEY_PREFIX).strip("/")
+        object_key = f"{key_prefix}/{int(time.time())}_{uuid.uuid4().hex}.png"
+        target = f"{endpoint_url.rstrip('/')}/{bucket_name}/{object_key}"
+        return target, bucket_name, endpoint_url, object_key
+    if OUTPUT_S3_URL:
+        key_name = f"visgate/{int(time.time())}_{uuid.uuid4().hex}.png"
+        return f"{OUTPUT_S3_URL.rstrip('/')}/{key_name}", None, None, key_name
+    return None, None, None, None
+
+
+def _maybe_upload_output(image_base64: str, job: dict[str, Any], job_input: dict[str, Any]) -> Optional[dict[str, Any]]:
+    """Upload base64 output to S3 via s5cmd and return normalized artifact metadata."""
+    s3_config = _job_s3_config(job, job_input)
+    target, bucket_name, endpoint_url, object_key = _artifact_target(s3_config)
+    if not target:
         return None
     import base64
     import os
@@ -97,17 +124,29 @@ def _maybe_upload_output(image_base64: str) -> Optional[str]:
     except Exception:
         return None
 
-    key_name = f"visgate/{int(time.time())}.png"
-    target = f"{OUTPUT_S3_URL.rstrip('/')}/{key_name}"
     tmp_path = ""
     try:
+        raw_bytes = base64.b64decode(image_base64)
         with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
-            tmp.write(base64.b64decode(image_base64))
+            tmp.write(raw_bytes)
             tmp_path = tmp.name
-        subprocess.run(["s5cmd", "cp", tmp_path, target], check=True)
-        if CDN_BASE_URL:
-            return f"{CDN_BASE_URL.rstrip('/')}/{key_name}"
-        return target
+        env = os.environ.copy()
+        if s3_config:
+            env["AWS_ACCESS_KEY_ID"] = s3_config.get("accessId", "")
+            env["AWS_SECRET_ACCESS_KEY"] = s3_config.get("accessSecret", "")
+            env["AWS_ENDPOINT_URL"] = s3_config.get("endpointUrl", "")
+        subprocess.run(["s5cmd", "cp", tmp_path, target], check=True, env=env)
+        url = target
+        if CDN_BASE_URL and object_key:
+            url = f"{CDN_BASE_URL.rstrip('/')}/{object_key}"
+        return {
+            "bucket_name": bucket_name,
+            "endpoint_url": endpoint_url,
+            "key": object_key,
+            "url": url,
+            "content_type": "image/png",
+            "bytes": len(raw_bytes),
+        }
     except Exception:
         return None
     finally:
@@ -224,6 +263,7 @@ def handler(job: dict[str, Any]) -> dict[str, Any]:
         global _last_request_at, _failure_count
         _last_request_at = time.time()
         _log_tunnel("INFO", "Inference started")
+        started_at = time.time()
         result = _pipeline.run(
             prompt=str(prompt).strip(),
             num_inference_steps=int(job_input.get("num_inference_steps", DEFAULT_NUM_INFERENCE_STEPS)),
@@ -232,12 +272,13 @@ def handler(job: dict[str, Any]) -> dict[str, Any]:
             width=job_input.get("width"),
             seed=job_input.get("seed"),
         )
-        if OUTPUT_S3_URL and result.get("image_base64"):
-            upload_info = _maybe_upload_output(result["image_base64"])
+        if result.get("image_base64"):
+            upload_info = _maybe_upload_output(result["image_base64"], job, job_input)
             if upload_info:
-                result["cdn_url"] = upload_info
+                result["artifact"] = upload_info
                 if RETURN_BASE64.lower() != "true":
                     result.pop("image_base64", None)
+        result["execution_duration_ms"] = max(int((time.time() - started_at) * 1000), 0)
         _log_tunnel("INFO", "Inference completed")
         _failure_count = 0
         return result

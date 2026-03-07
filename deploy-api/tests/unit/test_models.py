@@ -12,7 +12,7 @@ from src.models.model_specs_registry import (
     get_model_specs,
     get_vram_gb,
 )
-from src.models.schemas import DeploymentCreate
+from src.models.schemas import DeploymentCreate, InferenceJobCreate
 
 
 def test_model_specs_registry_has_seed_models() -> None:
@@ -99,6 +99,22 @@ def test_deployment_create_invalid_url() -> None:
             hf_model_id="x",
             user_runpod_key="y",
             user_webhook_url="not-a-url",
+        )
+
+
+def test_deployment_create_webhook_optional() -> None:
+    body = DeploymentCreate(
+        hf_model_id="stabilityai/sdxl-turbo",
+        user_runpod_key="rpa_xxx",
+    )
+    assert body.user_webhook_url is None
+
+
+def test_inference_job_create_requires_s3_config() -> None:
+    with pytest.raises(ValidationError):
+        InferenceJobCreate(
+            deployment_id="dep_2026_ready123",
+            input={"prompt": "test"},
         )
 
 

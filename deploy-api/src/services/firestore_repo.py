@@ -1,11 +1,11 @@
-"""Firestore access for deployment documents."""
+"""Firestore access for deployment documents and inference jobs."""
 
 from datetime import UTC, datetime
 
 from google.cloud import firestore  # type: ignore
 from google.cloud.firestore_v1.base_query import FieldFilter
 
-from src.models.entities import DeploymentDoc, LogEntry
+from src.models.entities import DeploymentDoc, InferenceJobDoc, LogEntry
 
 
 def get_firestore_client(project_id: str | None = None):  # type: ignore
@@ -159,3 +159,50 @@ def find_reusable_deployment(
             continue
         return DeploymentDoc.from_firestore_dict(data)
     return None
+
+
+def inference_job_ref(client: firestore.Client, collection: str, job_id: str):
+    return client.collection(collection).document(job_id)
+
+
+def get_inference_job(
+    client: firestore.Client,
+    collection: str,
+    job_id: str,
+) -> InferenceJobDoc | None:
+    ref = inference_job_ref(client, collection, job_id)
+    doc = ref.get()
+    if not doc or not doc.exists:
+        return None
+    return InferenceJobDoc.from_firestore_dict(doc.to_dict())
+
+
+def set_inference_job(
+    client: firestore.Client,
+    collection: str,
+    doc: InferenceJobDoc,
+) -> None:
+    inference_job_ref(client, collection, doc.job_id).set(doc.to_firestore_dict())
+
+
+def update_inference_job(
+    client: firestore.Client,
+    collection: str,
+    job_id: str,
+    updates: dict,
+) -> None:
+    inference_job_ref(client, collection, job_id).update(updates)
+
+
+def list_inference_jobs(
+    client: firestore.Client,
+    collection: str,
+    user_hash: str,
+    deployment_id: str | None = None,
+    limit: int = 20,
+) -> list[InferenceJobDoc]:
+    query = client.collection(collection).where(filter=FieldFilter("user_hash", "==", user_hash))
+    if deployment_id:
+        query = query.where(filter=FieldFilter("deployment_id", "==", deployment_id))
+    query = query.order_by("created_at", direction=firestore.Query.DESCENDING).limit(min(limit, 100))
+    return [InferenceJobDoc.from_firestore_dict(snap.to_dict()) for snap in query.stream() if snap.to_dict()]

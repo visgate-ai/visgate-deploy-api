@@ -70,6 +70,11 @@ class Settings(BaseSettings):
         min_length=1,
         description="Firestore collection for GPU tier mappings",
     )
+    firestore_collection_inference_jobs: str = Field(
+        default="inference_jobs",
+        min_length=1,
+        description="Firestore collection for inference job documents",
+    )
 
     # Runpod
     docker_image: str = Field(

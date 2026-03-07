@@ -40,11 +40,13 @@ Creates a deployment (async). Returns 202 with `deployment_id`; processing conti
 ```json
 {
   "hf_model_id": "black-forest-labs/FLUX.1-schnell",
-  "user_webhook_url": "https://your-app.com/webhook",
+   "user_webhook_url": "https://your-app.com/webhook",
   "gpu_tier": "A40",
   "hf_token": "optional_for_gated_models"
 }
 ```
+
+`user_webhook_url` is optional. If omitted, clients can poll `GET /v1/deployments/{deployment_id}` until the deployment reaches `ready` or `failed`.
 
 **Response (202):**
 ```json
@@ -64,6 +66,67 @@ Creates a deployment (async). Returns 202 with `deployment_id`; processing conti
 Returns current status, Runpod endpoint URL, logs, and error (if failed).
 
 **Response:** `status` progression: `accepted_cold` → `validating` → `selecting_gpu` → `creating_endpoint` → `loading_model` → `ready`. Terminal states: `failed`, `webhook_failed`.
+
+### POST /v1/inference/jobs
+
+Submits an async inference job to a ready deployment. This keeps RunPod job orchestration behind the Deploy API instead of forcing clients to call RunPod directly.
+
+**Request:**
+```json
+{
+   "deployment_id": "dep_2026_abc123",
+   "task": "text_to_image",
+   "input": {
+      "prompt": "A glass city at sunrise"
+   },
+   "policy": {
+      "execution_timeout_ms": 900000,
+      "ttl_ms": 3600000,
+      "low_priority": false
+   },
+   "s3Config": {
+      "accessId": "AKIA...",
+      "accessSecret": "secret",
+      "bucketName": "customer-output-bucket",
+      "endpointUrl": "https://s3.example.com",
+      "keyPrefix": "visgate/jobs"
+   }
+}
+```
+
+`s3Config` is required for inference jobs. Output artifacts are expected to land in the caller-owned bucket, and the Deploy API stores only artifact metadata plus compact previews in Firestore.
+
+**Response (202):**
+```json
+{
+   "job_id": "job_20260308_ab12cd34",
+   "deployment_id": "dep_2026_abc123",
+   "provider": "runpod",
+   "provider_job_id": "eaebd6e7-6a92-4bb8-a911-f996ac5ea99d",
+   "status": "queued",
+   "provider_status": "IN_QUEUE",
+   "output_destination": {
+      "bucket_name": "customer-output-bucket",
+      "endpoint_url": "https://s3.example.com",
+      "key_prefix": "visgate/jobs"
+   },
+   "created_at": "2026-03-08T12:00:00Z"
+}
+```
+
+### GET /v1/inference/jobs/{job_id}
+
+Refreshes the underlying RunPod `/status` response, updates local state, and returns the latest job record. Terminal states are `completed`, `failed`, `cancelled`, and `expired`.
+
+Completed jobs return artifact location metadata, compact output previews, duration metrics, and any provider-supplied cost estimate that can be extracted safely. Raw result payloads are not used as a storage fallback.
+
+### POST /v1/inference/jobs/{job_id}/cancel
+
+Cancels a queued or running RunPod job and updates the stored job status.
+
+### POST /v1/inference/jobs/{job_id}/retry
+
+Retries a failed RunPod job using the same provider job ID.
 
 ### DELETE /v1/deployments/{deployment_id}
 

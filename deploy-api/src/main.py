@@ -10,6 +10,7 @@ from src.api.middleware.strip_root_path import StripRootPathMiddleware
 from src.api.routes import (
     deployments_router,
     health_router,
+    inference_router,
     internal_router,
     models_router,
     providers_router,
@@ -50,6 +51,7 @@ app.include_router(health_router)
 app.include_router(models_router)
 app.include_router(providers_router)
 app.include_router(deployments_router)
+app.include_router(inference_router)
 app.include_router(internal_router)
 app.include_router(tasks_router)
 

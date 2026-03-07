@@ -15,6 +15,23 @@ class ProviderEndpointSummary(TypedDict):
     url: str | None
     raw_response: Any
 
+
+class ProviderJobAccepted(TypedDict):
+    id: str
+    status: str
+    raw_response: Any
+
+
+class ProviderJobStatus(TypedDict, total=False):
+    id: str
+    status: str
+    output: Any
+    error: Any
+    delay_time: int | None
+    execution_time: int | None
+    cost_usd: float | None
+    raw_response: Any
+
 class BaseInferenceProvider(ABC):
     """
     Abstract base class for inference providers (Runpod, Vast.ai, Lambda, etc.)
@@ -52,4 +69,38 @@ class BaseInferenceProvider(ABC):
     @abstractmethod
     def get_run_url(self, endpoint_id: str) -> str:
         """Return the public URL to send inference requests to."""
+        pass
+
+    @abstractmethod
+    async def submit_job(
+        self,
+        endpoint_url: str,
+        api_key: str,
+        job_input: dict[str, Any],
+        *,
+        webhook_url: str | None = None,
+        policy: dict[str, Any] | None = None,
+        s3_config: dict[str, Any] | None = None,
+    ) -> ProviderJobAccepted:
+        """Submit an async inference job."""
+        pass
+
+    @abstractmethod
+    async def get_job_status(self, endpoint_url: str, job_id: str, api_key: str) -> ProviderJobStatus:
+        """Fetch provider job status."""
+        pass
+
+    @abstractmethod
+    async def cancel_job(self, endpoint_url: str, job_id: str, api_key: str) -> ProviderJobStatus:
+        """Cancel a provider job."""
+        pass
+
+    @abstractmethod
+    async def retry_job(self, endpoint_url: str, job_id: str, api_key: str) -> ProviderJobStatus:
+        """Retry a failed provider job."""
+        pass
+
+    @abstractmethod
+    async def get_endpoint_health(self, endpoint_url: str, api_key: str) -> dict[str, Any]:
+        """Return provider endpoint health information."""
         pass

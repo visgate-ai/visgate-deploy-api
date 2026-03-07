@@ -570,28 +570,30 @@ async def mark_deployment_ready_and_notify(
             }
         }
     }
-    success = await notify(
-        doc.user_webhook_url,
-        payload,
-        timeout_seconds=settings.webhook_timeout_seconds,
-        retries=settings.webhook_max_retries,
-        deployment_id=deployment_id,
-    )
-    if not success:
-        update_deployment(
-            client,
-            coll,
-            deployment_id,
-            {"error": "User webhook delivery failed after retries"},
+    success = True
+    if doc.user_webhook_url:
+        success = await notify(
+            doc.user_webhook_url,
+            payload,
+            timeout_seconds=settings.webhook_timeout_seconds,
+            retries=settings.webhook_max_retries,
+            deployment_id=deployment_id,
         )
-        append_log(
-            client,
-            coll,
-            deployment_id,
-            "WARNING",
-            "User webhook delivery failed after retries; deployment remains ready",
-        )
-        record_webhook_failure()
+        if not success:
+            update_deployment(
+                client,
+                coll,
+                deployment_id,
+                {"error": "User webhook delivery failed after retries"},
+            )
+            append_log(
+                client,
+                coll,
+                deployment_id,
+                "WARNING",
+                "User webhook delivery failed after retries; deployment remains ready",
+            )
+            record_webhook_failure()
     return success
 
 

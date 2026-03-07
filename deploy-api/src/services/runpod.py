@@ -10,6 +10,8 @@ from src.core.telemetry import record_runpod_api_error, span
 from src.services.base_provider import (
     BaseInferenceProvider,
     ProviderEndpoint,
+    ProviderJobAccepted,
+    ProviderJobStatus,
     ProviderEndpointSummary,
 )
 from src.services.provider_factory import register_provider
@@ -164,6 +166,80 @@ class RunpodProvider(BaseInferenceProvider):
 
     def get_run_url(self, endpoint_id: str) -> str:
         return f"https://api.runpod.ai/v2/{endpoint_id}/run"
+
+    def _endpoint_root(self, endpoint_url: str) -> str:
+        return endpoint_url[:-4] if endpoint_url.endswith("/run") else endpoint_url.rstrip("/")
+
+    async def _endpoint_request(
+        self,
+        method: str,
+        url: str,
+        api_key: str,
+        *,
+        json_payload: dict[str, Any] | None = None,
+        timeout: float = 30.0,
+    ) -> dict[str, Any]:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            resp = await client.request(
+                method,
+                url,
+                json=json_payload,
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                    "Accept": "application/json",
+                },
+            )
+        if resp.status_code >= 400:
+            raise RunpodAPIError(
+                message=f"HTTP {resp.status_code}: {resp.text[:500]}",
+                status_code=resp.status_code,
+            )
+        return resp.json()
+
+    async def submit_job(
+        self,
+        endpoint_url: str,
+        api_key: str,
+        job_input: dict[str, Any],
+        *,
+        webhook_url: str | None = None,
+        policy: dict[str, Any] | None = None,
+        s3_config: dict[str, Any] | None = None,
+    ) -> ProviderJobAccepted:
+        payload: dict[str, Any] = {"input": job_input}
+        if webhook_url:
+            payload["webhook"] = webhook_url
+        if policy:
+            payload["policy"] = policy
+        if s3_config:
+            payload["s3Config"] = s3_config
+        data = await self._endpoint_request("POST", self._endpoint_root(endpoint_url) + "/run", api_key, json_payload=payload)
+        return {"id": data.get("id", ""), "status": data.get("status", "IN_QUEUE"), "raw_response": data}
+
+    async def get_job_status(self, endpoint_url: str, job_id: str, api_key: str) -> ProviderJobStatus:
+        data = await self._endpoint_request("GET", f"{self._endpoint_root(endpoint_url)}/status/{job_id}", api_key)
+        return {
+            "id": data.get("id", job_id),
+            "status": data.get("status", "UNKNOWN"),
+            "output": data.get("output"),
+            "error": data.get("error"),
+            "delay_time": data.get("delayTime"),
+            "execution_time": data.get("executionTime"),
+            "cost_usd": data.get("costUSD") or data.get("costUsd") or data.get("cost"),
+            "raw_response": data,
+        }
+
+    async def cancel_job(self, endpoint_url: str, job_id: str, api_key: str) -> ProviderJobStatus:
+        data = await self._endpoint_request("POST", f"{self._endpoint_root(endpoint_url)}/cancel/{job_id}", api_key)
+        return {"id": data.get("id", job_id), "status": data.get("status", "CANCELLED"), "raw_response": data}
+
+    async def retry_job(self, endpoint_url: str, job_id: str, api_key: str) -> ProviderJobStatus:
+        data = await self._endpoint_request("POST", f"{self._endpoint_root(endpoint_url)}/retry/{job_id}", api_key)
+        return {"id": data.get("id", job_id), "status": data.get("status", "IN_QUEUE"), "raw_response": data}
+
+    async def get_endpoint_health(self, endpoint_url: str, api_key: str) -> dict[str, Any]:
+        return await self._endpoint_request("GET", self._endpoint_root(endpoint_url) + "/health", api_key)
 
 # Register the provider
 register_provider("runpod", RunpodProvider())

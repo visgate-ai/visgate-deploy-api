@@ -1,13 +1,14 @@
-"""In-memory repository for deployments (non-persistent)."""
+"""In-memory repository for deployments and inference jobs (non-persistent)."""
 import os
 from datetime import UTC, datetime
 from typing import Any
 
-from src.models.entities import DeploymentDoc
+from src.models.entities import DeploymentDoc, InferenceJobDoc
 from src.services.gpu_registry import DEFAULT_GPU_REGISTRY, DEFAULT_TIER_MAPPING
 
 # Global store
 _deployments: dict[str, dict] = {}
+_inference_jobs: dict[str, dict] = {}
 _api_keys: dict[str, dict] = {}
 
 # Just to mock the signature
@@ -117,3 +118,48 @@ def find_reusable_deployment(
 ) -> None:
     """In-memory mode does not support endpoint reuse — always returns None."""
     return None
+
+
+def get_inference_job(
+    client: Any,
+    collection: str,
+    job_id: str,
+) -> InferenceJobDoc | None:
+    data = _inference_jobs.get(job_id)
+    if not data:
+        return None
+    return InferenceJobDoc.from_firestore_dict(data)
+
+
+def set_inference_job(
+    client: Any,
+    collection: str,
+    doc: InferenceJobDoc,
+) -> None:
+    _inference_jobs[doc.job_id] = doc.to_firestore_dict()
+
+
+def update_inference_job(
+    client: Any,
+    collection: str,
+    job_id: str,
+    updates: dict,
+) -> None:
+    if job_id in _inference_jobs:
+        _inference_jobs[job_id].update(updates)
+
+
+def list_inference_jobs(
+    client: Any,
+    collection: str,
+    user_hash: str,
+    deployment_id: str | None = None,
+    limit: int = 20,
+) -> list[InferenceJobDoc]:
+    results = [
+        InferenceJobDoc.from_firestore_dict(data)
+        for data in _inference_jobs.values()
+        if data.get("user_hash") == user_hash and (not deployment_id or data.get("deployment_id") == deployment_id)
+    ]
+    results.sort(key=lambda d: d.created_at or "", reverse=True)
+    return results[:min(limit, 100)]

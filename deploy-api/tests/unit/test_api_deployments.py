@@ -62,6 +62,27 @@ def test_post_deployments_task_field_accepted(
     mock_enqueue.assert_called_once()
 
 
+@patch("src.api.routes.deployments.enqueue_orchestration_task", new_callable=AsyncMock)
+def test_post_deployments_canonical_task_field_accepted(
+    mock_enqueue,
+    client: TestClient,
+    auth_headers: dict,
+) -> None:
+    """POST with canonical task names is accepted and normalized."""
+    resp = client.post(
+        "/v1/deployments",
+        json={
+            "hf_model_id": "black-forest-labs/FLUX.1-schnell",
+            "user_runpod_key": "rpa_xxx",
+            "user_webhook_url": "https://example.com/webhook",
+            "task": "text_to_image",
+        },
+        headers=auth_headers,
+    )
+    assert resp.status_code == 202
+    mock_enqueue.assert_called_once()
+
+
 def test_post_deployments_missing_hf_model_id_returns_422(
     client: TestClient,
     auth_headers: dict,
@@ -76,6 +97,25 @@ def test_post_deployments_missing_hf_model_id_returns_422(
         headers=auth_headers,
     )
     assert resp.status_code == 422
+
+
+@patch("src.api.routes.deployments.enqueue_orchestration_task", new_callable=AsyncMock)
+def test_post_deployments_allows_missing_webhook(
+    mock_enqueue,
+    client: TestClient,
+    auth_headers: dict,
+) -> None:
+    resp = client.post(
+        "/v1/deployments",
+        json={
+            "hf_model_id": "black-forest-labs/FLUX.1-schnell",
+            "user_runpod_key": "rpa_xxx",
+        },
+        headers=auth_headers,
+    )
+    assert resp.status_code == 202
+    assert resp.json()["webhook_url"] == ""
+    mock_enqueue.assert_called_once()
 
 
 def test_post_deployments_401_without_auth(client: TestClient, deployment_create_payload: dict) -> None:

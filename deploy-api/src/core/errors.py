@@ -109,3 +109,27 @@ class InvalidDeploymentRequestError(OrchestratorError):
 
     def __init__(self, message: str) -> None:
         super().__init__(message, status_code=400, error_code="INVALID_DEPLOYMENT_REQUEST")
+
+
+class InferenceJobNotFoundError(OrchestratorError):
+    """Raised when inference job ID is not found."""
+
+    def __init__(self, job_id: str) -> None:
+        super().__init__(
+            f"Inference job not found: {job_id}",
+            status_code=404,
+            error_code="INFERENCE_JOB_NOT_FOUND",
+            details={"job_id": job_id},
+        )
+
+
+class InvalidInferenceJobRequestError(OrchestratorError):
+    """Raised when inference job request is invalid or incompatible with deployment state."""
+
+    def __init__(self, message: str, *, details: dict[str, Any] | None = None) -> None:
+        super().__init__(
+            message,
+            status_code=400,
+            error_code="INVALID_INFERENCE_JOB_REQUEST",
+            details=details or {},
+        )

@@ -1,13 +1,14 @@
-"""Internal routes: deployment-ready callback from inference container."""
+"""Internal routes: deployment and inference job callbacks."""
 
 import asyncio
 import fnmatch
 import json
 import os
 import time
-from typing import Annotated
+from datetime import UTC, datetime
+from typing import Annotated, Any
 
-from fastapi import APIRouter, Header, HTTPException
+from fastapi import APIRouter, Header, HTTPException, Query
 from pydantic import BaseModel
 
 from src.core.config import get_settings
@@ -18,13 +19,38 @@ from src.services.deployment import (
     orchestrate_deployment,
     update_deployment_phase_from_worker,
 )
+from src.services.inference_jobs import (
+    build_job_metrics,
+    compact_payload,
+    estimate_cost_from_execution,
+    extract_artifact_metadata,
+    extract_estimated_cost,
+    map_provider_status,
+)
 from src.services.firestore_repo import get_deployment, update_deployment
 from src.services.log_tunnel import append_live_log
 from src.services.provider_factory import get_provider
 from src.services.r2_manifest import add_model_to_manifest, fetch_cached_model_ids, model_s3_url
 from src.services.secret_cache import get_secrets
+from src.services.webhook import notify
 
 router = APIRouter(prefix="/internal", tags=["internal"])
+
+
+def _get_repo():
+    if get_settings().effective_use_memory_repo:
+        import src.services.memory_repo as repo
+    else:
+        import src.services.firestore_repo as repo
+    return repo
+
+
+def get_inference_job(*args, **kwargs):
+    return _get_repo().get_inference_job(*args, **kwargs)
+
+
+def update_inference_job(*args, **kwargs):
+    return _get_repo().update_inference_job(*args, **kwargs)
 
 
 class LiveLogPayload(BaseModel):
@@ -291,6 +317,7 @@ async def task_cache_model(
         },
     )
 
+@router.post("/deployment-ready/{deployment_id}")
 async def deployment_ready(
     deployment_id: str,
     payload: DeploymentReadyPayload | None = None,
@@ -332,6 +359,93 @@ async def deployment_ready(
         "status": data.status,
         "webhook_delivered": False,
     }
+
+
+@router.post("/inference/jobs/{job_id}/complete")
+async def inference_job_complete(
+    job_id: str,
+    payload: dict[str, Any],
+    secret: str | None = Query(default=None),
+    x_visgate_secret: Annotated[
+        str | None,
+        Header(alias="X-Visgate-Internal-Secret"),
+    ] = None,
+) -> dict[str, str]:
+    settings = get_settings()
+    provided_secret = x_visgate_secret or secret
+    if settings.internal_webhook_secret and provided_secret != settings.internal_webhook_secret:
+        raise HTTPException(status_code=403, detail="Invalid internal secret")
+
+    client = _get_repo().get_firestore_client(settings.gcp_project_id)
+    collection = settings.firestore_collection_inference_jobs
+    job = get_inference_job(client, collection, job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Inference job not found")
+
+    provider_status = payload.get("status") or job.provider_status
+    status_value = map_provider_status(provider_status)
+    updates: dict[str, Any] = {
+        "provider_job_id": payload.get("id") or job.provider_job_id,
+        "provider_status": provider_status,
+        "status": status_value,
+        "updated_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+        "progress": compact_payload(payload.get("progress")),
+        "output_preview": compact_payload(payload.get("output")),
+        "artifact": extract_artifact_metadata(payload.get("output"), job.output_destination),
+    }
+    if payload.get("output") is not None and status_value == "completed":
+        updates["output_payload"] = compact_payload(payload.get("output"))
+    if payload.get("error") is not None:
+        updates["error"] = compact_payload(payload.get("error"))
+    if status_value in {"completed", "failed", "cancelled", "expired"}:
+        completed_at = datetime.now(UTC).isoformat().replace("+00:00", "Z")
+        updates["completed_at"] = completed_at
+        updates["metrics"] = build_job_metrics(
+            created_at=job.created_at,
+            completed_at=completed_at,
+            queue_ms=payload.get("delayTime"),
+            execution_ms=payload.get("executionTime"),
+        )
+    estimated_cost_usd = extract_estimated_cost(payload)
+    if estimated_cost_usd is None:
+        estimated_cost_usd = estimate_cost_from_execution(payload.get("executionTime"), job.gpu_price_per_hour_usd)
+    if estimated_cost_usd is not None:
+        updates["estimated_cost_usd"] = estimated_cost_usd
+
+    update_inference_job(client, collection, job_id, updates)
+    refreshed_job = get_inference_job(client, collection, job_id)
+
+    if job.user_webhook_url:
+        delivered = await notify(
+            job.user_webhook_url,
+            {
+                "event": f"inference_job_{status_value}",
+                "job_id": job_id,
+                "deployment_id": job.deployment_id,
+                "provider_job_id": payload.get("id") or job.provider_job_id,
+                "status": status_value,
+                "provider_status": provider_status,
+                "gpu_allocated": job.gpu_allocated,
+                "output_destination": refreshed_job.output_destination if refreshed_job else job.output_destination,
+                "artifact": refreshed_job.artifact if refreshed_job else updates.get("artifact"),
+                "metrics": refreshed_job.metrics if refreshed_job else updates.get("metrics"),
+                "estimated_cost_usd": refreshed_job.estimated_cost_usd if refreshed_job else updates.get("estimated_cost_usd"),
+                "output": refreshed_job.output_payload if refreshed_job else compact_payload(payload.get("output")),
+                "error": compact_payload(payload.get("error")),
+            },
+            timeout_seconds=settings.webhook_timeout_seconds,
+            retries=settings.webhook_max_retries,
+            deployment_id=job.deployment_id,
+        )
+        if delivered:
+            update_inference_job(
+                client,
+                collection,
+                job_id,
+                {"webhook_delivered_at": datetime.now(UTC).isoformat().replace("+00:00", "Z")},
+            )
+
+    return {"status": "ok", "job_id": job_id}
 
 
 @router.post("/logs/{deployment_id}")

@@ -1,6 +1,6 @@
 # Visgate HF Inference Worker (Runpod)
 
-Docker image that loads any supported Hugging Face diffusion model and exposes a Runpod serverless endpoint. Used by the **deploy-api** service in this repo: when a deployment is created, Runpod runs this image with `HF_MODEL_ID` and `VISGATE_WEBHOOK`; after the model loads, the worker notifies the orchestrator and handles inference jobs. You send requests to the returned `endpoint_url` and get back images (base64) or errors.
+Docker image that loads any supported Hugging Face diffusion model and exposes a Runpod serverless endpoint. Used by the **deploy-api** service in this repo: when a deployment is created, Runpod runs this image with `HF_MODEL_ID` and `VISGATE_WEBHOOK`; after the model loads, the worker notifies the orchestrator and handles inference jobs. You send requests to the returned `endpoint_url` and get back artifact metadata, optional inline base64, or errors.
 
 ## Supported models (modular)
 
@@ -23,16 +23,25 @@ New model families can be added by adding a pipeline class in `pipelines/` and r
 
 ```json
 {
-  "prompt": "A photo of a cat",
-  "num_inference_steps": 28,
-  "guidance_scale": 3.5,
-  "height": 1024,
-  "width": 1024,
-  "seed": 42
+  "input": {
+    "prompt": "A photo of a cat",
+    "num_inference_steps": 28,
+    "guidance_scale": 3.5,
+    "height": 1024,
+    "width": 1024,
+    "seed": 42
+  },
+  "s3Config": {
+    "accessId": "AKIA...",
+    "accessSecret": "secret",
+    "bucketName": "customer-output-bucket",
+    "endpointUrl": "https://s3.example.com",
+    "keyPrefix": "visgate/jobs"
+  }
 }
 ```
 
-All fields except `prompt` are optional.
+All fields except `input.prompt` are optional. `s3Config` should be provided in production so the worker uploads results directly to caller-owned storage.
 
 ## Job output
 
@@ -41,12 +50,23 @@ Success:
 ```json
 {
   "image_base64": "<base64-encoded PNG>",
+  "artifact": {
+    "bucket_name": "customer-output-bucket",
+    "endpoint_url": "https://s3.example.com",
+    "key": "visgate/jobs/1741431234_abcd.png",
+    "url": "https://s3.example.com/customer-output-bucket/visgate/jobs/1741431234_abcd.png",
+    "content_type": "image/png",
+    "bytes": 182736
+  },
+  "execution_duration_ms": 4821,
   "model_id": "black-forest-labs/FLUX.1-schnell",
   "seed": 42,
   "height": 1024,
   "width": 1024
 }
 ```
+
+If `RETURN_BASE64=false`, the worker removes `image_base64` after a successful upload and returns artifact metadata only.
 
 Error:
 
@@ -131,7 +151,7 @@ while true; do
   sleep 5
 done
 
-# 3) Output is in response: output.image_base64, etc.
+# 3) Output is in response: output.artifact, output.image_base64 (optional), etc.
 ```
 
 ### Sync: /runsync (wait for result in one call)
@@ -143,5 +163,5 @@ curl -s -X POST "https://api.runpod.ai/v2/ENDPOINT_ID/runsync" \
   -d '{"input": {"prompt": "A photo of a sunset"}}'
 ```
 
-Response body contains `output` with `image_base64`, `model_id`, etc. Decode base64 to get the PNG image.
+Response body contains `output` with `artifact`, `execution_duration_ms`, and optionally `image_base64`. Decode base64 only when you intentionally keep inline payloads enabled.
 

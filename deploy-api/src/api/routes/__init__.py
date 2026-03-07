@@ -2,6 +2,7 @@
 
 from src.api.routes.deployments import router as deployments_router
 from src.api.routes.health import router as health_router
+from src.api.routes.inference import router as inference_router
 from src.api.routes.internal import router as internal_router
 from src.api.routes.models import router as models_router
 from src.api.routes.providers import router as providers_router
@@ -10,6 +11,7 @@ from src.api.routes.tasks import router as tasks_router
 __all__ = [
 	"deployments_router",
 	"health_router",
+	"inference_router",
 	"internal_router",
 	"models_router",
 	"providers_router",
