@@ -93,27 +93,30 @@ def _job_s3_config(job: dict[str, Any], job_input: dict[str, Any]) -> dict[str, 
     return raw
 
 
-def _artifact_target(s3_config: dict[str, Any] | None) -> tuple[str | None, str | None, str | None, str | None]:
+def _artifact_target(
+    s3_config: dict[str, Any] | None,
+) -> tuple[str | None, str | None, str | None, str | None, str | None]:
     if s3_config:
         bucket_name = s3_config.get("bucketName")
         endpoint_url = s3_config.get("endpointUrl")
         if not bucket_name or not endpoint_url:
-            return None, None, None, None
+            return None, None, None, None, None
         key_prefix = (s3_config.get("keyPrefix") or DEFAULT_OUTPUT_KEY_PREFIX).strip("/")
         object_key = f"{key_prefix}/{int(time.time())}_{uuid.uuid4().hex}.png"
-        target = f"{endpoint_url.rstrip('/')}/{bucket_name}/{object_key}"
-        return target, bucket_name, endpoint_url, object_key
+        upload_target = f"s3://{bucket_name}/{object_key}"
+        object_url = f"{endpoint_url.rstrip('/')}/{bucket_name}/{object_key}"
+        return upload_target, bucket_name, endpoint_url, object_key, object_url
     if OUTPUT_S3_URL:
         key_name = f"visgate/{int(time.time())}_{uuid.uuid4().hex}.png"
-        return f"{OUTPUT_S3_URL.rstrip('/')}/{key_name}", None, None, key_name
-    return None, None, None, None
+        return f"{OUTPUT_S3_URL.rstrip('/')}/{key_name}", None, None, key_name, None
+    return None, None, None, None, None
 
 
 def _maybe_upload_output(image_base64: str, job: dict[str, Any], job_input: dict[str, Any]) -> Optional[dict[str, Any]]:
     """Upload base64 output to S3 via s5cmd and return normalized artifact metadata."""
     s3_config = _job_s3_config(job, job_input)
-    target, bucket_name, endpoint_url, object_key = _artifact_target(s3_config)
-    if not target:
+    upload_target, bucket_name, endpoint_url, object_key, object_url = _artifact_target(s3_config)
+    if not upload_target:
         return None
     import base64
     import os
@@ -135,8 +138,8 @@ def _maybe_upload_output(image_base64: str, job: dict[str, Any], job_input: dict
             env["AWS_ACCESS_KEY_ID"] = s3_config.get("accessId", "")
             env["AWS_SECRET_ACCESS_KEY"] = s3_config.get("accessSecret", "")
             env["AWS_ENDPOINT_URL"] = s3_config.get("endpointUrl", "")
-        subprocess.run(["s5cmd", "cp", tmp_path, target], check=True, env=env)
-        url = target
+        subprocess.run(["s5cmd", "cp", tmp_path, upload_target], check=True, env=env)
+        url = object_url or upload_target
         if CDN_BASE_URL and object_key:
             url = f"{CDN_BASE_URL.rstrip('/')}/{object_key}"
         return {
