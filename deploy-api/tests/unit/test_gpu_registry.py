@@ -1,12 +1,11 @@
 """Unit tests for GPU registry."""
 
-import pytest
 
 from src.services.gpu_registry import (
     get_runpod_gpu_ids,
+    gpu_id_to_display_name,
     select_gpu_candidates_for_vram,
     select_gpu_id_for_vram,
-    gpu_id_to_display_name,
 )
 
 

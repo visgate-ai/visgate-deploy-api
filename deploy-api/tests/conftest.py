@@ -1,10 +1,10 @@
 """Pytest configuration and shared fixtures."""
 
 import os
+from unittest.mock import MagicMock
 
 import pytest
 from fastapi.testclient import TestClient
-from unittest.mock import MagicMock
 
 # Ensure src is on path and GCP env for tests
 os.environ.setdefault("GCP_PROJECT_ID", "visgate")

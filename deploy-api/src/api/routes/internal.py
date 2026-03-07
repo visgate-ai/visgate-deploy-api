@@ -5,7 +5,7 @@ import fnmatch
 import json
 import os
 import time
-from typing import Annotated, Optional
+from typing import Annotated
 
 from fastapi import APIRouter, Header, HTTPException
 from pydantic import BaseModel
@@ -34,7 +34,7 @@ class LiveLogPayload(BaseModel):
 
 class CleanupPayload(BaseModel):
     reason: str = "idle_timeout"
-    runpod_api_key: Optional[str] = None  # Passed by worker; eliminates multi-instance secret_cache dependency
+    runpod_api_key: str | None = None  # Passed by worker; eliminates multi-instance secret_cache dependency
 
 
 class ModelCachedPayload(BaseModel):

@@ -1,6 +1,7 @@
 """Dynamic GPU selection for Runpod serverless with Firestore support and cost-efficiency."""
 
-from typing import Optional, TypedDict
+from typing import TypedDict
+
 
 class GPUSpec(TypedDict):
     id: str
@@ -35,11 +36,11 @@ DEFAULT_TIER_MAPPING: dict[str, list[str]] = {
 }
 
 def select_gpu_id_for_vram(
-    vram_gb: int, 
-    gpu_tier: Optional[str] = None,
-    registry: Optional[list[GPUSpec]] = None,
-    tier_mapping: Optional[dict[str, list[str]]] = None
-) -> Optional[str]:
+    vram_gb: int,
+    gpu_tier: str | None = None,
+    registry: list[GPUSpec] | None = None,
+    tier_mapping: dict[str, list[str]] | None = None
+) -> str | None:
     """
     Select optimal GPU. Falls back to static defaults if registry/tier_mapping aren't provided (e.g. from Firestore).
     """
@@ -72,9 +73,9 @@ def select_gpu_id_for_vram(
 
 def select_gpu_candidates_for_vram(
     vram_gb: int,
-    gpu_tier: Optional[str] = None,
-    registry: Optional[list[GPUSpec]] = None,
-    tier_mapping: Optional[dict[str, list[str]]] = None,
+    gpu_tier: str | None = None,
+    registry: list[GPUSpec] | None = None,
+    tier_mapping: dict[str, list[str]] | None = None,
 ) -> list[str]:
     """Return candidate GPU IDs sorted by lowest cost that satisfy VRAM and optional tier."""
     reg = registry if registry else DEFAULT_GPU_REGISTRY
@@ -103,14 +104,14 @@ def select_gpu_candidates_for_vram(
     return result
 
 
-def get_runpod_gpu_ids(gpu_tier: Optional[str]) -> list[str]:
+def get_runpod_gpu_ids(gpu_tier: str | None) -> list[str]:
     """Return GPU IDs for a tier (used by tests and compatibility checks)."""
     if not gpu_tier:
         return list({gpu["id"] for gpu in DEFAULT_GPU_REGISTRY})
     normalized = gpu_tier.strip().upper()
     return DEFAULT_TIER_MAPPING.get(normalized, [])
 
-def gpu_id_to_display_name(gpu_id: str, registry: Optional[list[GPUSpec]] = None) -> str:
+def gpu_id_to_display_name(gpu_id: str, registry: list[GPUSpec] | None = None) -> str:
     """Resolve display name from registry or default."""
     reg = registry if registry else DEFAULT_GPU_REGISTRY
     for gpu in reg:
@@ -118,7 +119,7 @@ def gpu_id_to_display_name(gpu_id: str, registry: Optional[list[GPUSpec]] = None
             return gpu["display"]
     return f"NVIDIA {gpu_id}"
 
-def get_gpu_vram(gpu_id: str, registry: Optional[list[GPUSpec]] = None) -> int:
+def get_gpu_vram(gpu_id: str, registry: list[GPUSpec] | None = None) -> int:
     """Get VRAM for a specific GPU ID."""
     reg = registry if registry else DEFAULT_GPU_REGISTRY
     for gpu in reg:

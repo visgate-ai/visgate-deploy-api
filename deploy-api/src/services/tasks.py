@@ -8,6 +8,7 @@ from typing import Any
 
 from google.api_core.exceptions import AlreadyExists
 from google.cloud import tasks_v2
+
 from src.core.config import get_settings
 from src.core.logging import structured_log
 from src.services.deployment import orchestrate_deployment

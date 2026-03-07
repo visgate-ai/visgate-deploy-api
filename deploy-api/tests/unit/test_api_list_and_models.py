@@ -4,7 +4,6 @@ import os
 from datetime import UTC, datetime
 from unittest.mock import MagicMock, patch
 
-import pytest
 from fastapi.testclient import TestClient
 
 os.environ.setdefault("GCP_PROJECT_ID", "visgate")
@@ -165,7 +164,6 @@ def test_list_models_cached_entries_sorted_first(client: TestClient) -> None:
     with patch("src.api.routes.models.fetch_cached_model_ids") as mock_r2:
         mock_r2.return_value = {cached_id}
 
-        from src.core.config import get_settings
         import src.core.config as cfg_mod
         fake_settings = MagicMock()
         fake_settings.r2_endpoint_url = "https://r2.example.com"

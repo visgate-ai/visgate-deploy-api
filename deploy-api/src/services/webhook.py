@@ -1,7 +1,7 @@
 """User webhook notification with retries and graceful degradation."""
 
 import asyncio
-from typing import Any, Optional
+from typing import Any
 
 import httpx
 
@@ -15,7 +15,7 @@ async def notify(
     *,
     timeout_seconds: int = 10,
     retries: int = 3,
-    deployment_id: Optional[str] = None,
+    deployment_id: str | None = None,
 ) -> bool:
     """
     POST payload to user webhook URL with exponential backoff.
@@ -28,7 +28,7 @@ async def notify(
         headers["X-Visgate-Internal-Secret"] = settings.internal_webhook_secret
 
     with span("webhook.notify", {"url": url, "deployment_id": deployment_id}):
-        last_error: Optional[Exception] = None
+        last_error: Exception | None = None
         for attempt in range(retries):
             try:
                 async with httpx.AsyncClient(timeout=timeout_seconds) as client:

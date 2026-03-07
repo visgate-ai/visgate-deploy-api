@@ -1,5 +1,6 @@
 from abc import ABC, abstractmethod
-from typing import Any, Optional, TypedDict
+from typing import Any, TypedDict
+
 
 class ProviderEndpoint(TypedDict):
     id: str
@@ -11,7 +12,7 @@ class ProviderEndpointSummary(TypedDict):
     id: str
     name: str
     status: str
-    url: Optional[str]
+    url: str | None
     raw_response: Any
 
 class BaseInferenceProvider(ABC):
@@ -19,7 +20,7 @@ class BaseInferenceProvider(ABC):
     Abstract base class for inference providers (Runpod, Vast.ai, Lambda, etc.)
     Ensures the orchestrator doesn't care WHO is running the pod.
     """
-    
+
     @abstractmethod
     async def create_endpoint(
         self,
@@ -41,6 +42,11 @@ class BaseInferenceProvider(ABC):
     @abstractmethod
     async def list_endpoints(self, api_key: str) -> list[ProviderEndpointSummary]:
         """List endpoints for the current account."""
+        pass
+
+    @abstractmethod
+    async def list_gpu_types(self, api_key: str) -> list[dict[str, Any]]:
+        """List available GPU types and pricing."""
         pass
 
     @abstractmethod

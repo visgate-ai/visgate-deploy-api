@@ -5,7 +5,7 @@ import logging
 import re
 import sys
 from datetime import UTC, datetime
-from typing import Any, Optional
+from typing import Any
 
 # Patterns to redact from log output
 SECRET_PATTERNS = (
@@ -47,14 +47,14 @@ def structured_log(
     level: str,
     message: str,
     *,
-    deployment_id: Optional[str] = None,
-    trace_id: Optional[str] = None,
-    span_id: Optional[str] = None,
-    operation: Optional[str] = None,
-    duration_ms: Optional[int | float] = None,
-    metadata: Optional[dict[str, Any]] = None,
-    error: Optional[dict[str, Any]] = None,
-    logger: Optional[logging.Logger] = None,
+    deployment_id: str | None = None,
+    trace_id: str | None = None,
+    span_id: str | None = None,
+    operation: str | None = None,
+    duration_ms: int | float | None = None,
+    metadata: dict[str, Any] | None = None,
+    error: dict[str, Any] | None = None,
+    logger: logging.Logger | None = None,
     **extra_metadata: Any,
 ) -> None:
     """Emit a structured log entry for Cloud Logging."""

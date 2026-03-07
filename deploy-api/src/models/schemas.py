@@ -1,7 +1,7 @@
 """Pydantic request/response models for API and internal webhooks."""
 
 from datetime import datetime
-from typing import Literal, Optional
+from typing import Literal
 
 from pydantic import BaseModel, Field, HttpUrl
 
@@ -11,32 +11,32 @@ class DeploymentCreate(BaseModel):
     """POST /v1/deployments request body."""
 
     hf_model_id: str = Field(..., min_length=1, max_length=256, description="Hugging Face model ID, e.g. 'black-forest-labs/FLUX.1-schnell'. See GET /v1/models for supported models.")
-    user_runpod_key: Optional[str] = Field(default=None, min_length=1, description="RunPod API key. If omitted, the Authorization Bearer token is used. Providing it here takes precedence.")
+    user_runpod_key: str | None = Field(default=None, min_length=1, description="RunPod API key. If omitted, the Authorization Bearer token is used. Providing it here takes precedence.")
     user_webhook_url: HttpUrl = Field(..., description="URL to notify when deployment is ready")
-    gpu_tier: Optional[str] = Field(default=None, max_length=64, description="e.g. A40; auto-select if omitted")
-    hf_token: Optional[str] = Field(default=None, description="Optional HF token for gated models")
-    region: Optional[str] = Field(default=None, max_length=32, description="Preferred Runpod region/location")
-    task: Optional[Literal["text2img", "image2img", "text2video"]] = Field(
+    gpu_tier: str | None = Field(default=None, max_length=64, description="e.g. A40; auto-select if omitted")
+    hf_token: str | None = Field(default=None, description="Optional HF token for gated models")
+    region: str | None = Field(default=None, max_length=32, description="Preferred Runpod region/location")
+    task: Literal["text2img", "image2img", "text2video"] | None = Field(
         default="text2img",
         description="Intended task for compatibility checks",
     )
-    cache_scope: Optional[Literal["off", "shared", "private"]] = Field(
+    cache_scope: Literal["off", "shared", "private"] | None = Field(
         default="off",
         description="Model cache scope: off, shared (platform), or private (user-provided)",
     )
-    user_s3_url: Optional[str] = Field(
+    user_s3_url: str | None = Field(
         default=None,
         description="Private cache base URL (S3/R2/Minio). Used when cache_scope=private",
     )
-    user_aws_access_key_id: Optional[str] = Field(
+    user_aws_access_key_id: str | None = Field(
         default=None,
         description="Private cache AWS access key (cache_scope=private)",
     )
-    user_aws_secret_access_key: Optional[str] = Field(
+    user_aws_secret_access_key: str | None = Field(
         default=None,
         description="Private cache AWS secret access key (cache_scope=private)",
     )
-    user_aws_endpoint_url: Optional[str] = Field(
+    user_aws_endpoint_url: str | None = Field(
         default=None,
         description="Private cache endpoint URL (cache_scope=private)",
     )
@@ -54,7 +54,7 @@ class DeploymentResponse202(BaseModel):
     poll_interval_seconds: int = Field(default=5, ge=1, le=30)
     stream_url: str
     webhook_url: str
-    endpoint_url: Optional[str] = None
+    endpoint_url: str | None = None
     path: Literal["warm", "cold"] = "cold"
     created_at: datetime
 
@@ -86,17 +86,17 @@ class DeploymentResponse(BaseModel):
     deployment_id: str
     status: DeploymentStatus
     hf_model_id: str = ""
-    task: Optional[str] = None
-    runpod_endpoint_id: Optional[str] = None
-    endpoint_url: Optional[str] = None
-    gpu_allocated: Optional[str] = None
-    model_vram_gb: Optional[int] = None
+    task: str | None = None
+    runpod_endpoint_id: str | None = None
+    endpoint_url: str | None = None
+    gpu_allocated: str | None = None
+    model_vram_gb: int | None = None
     logs: list[LogEntrySchema] = Field(default_factory=list)
-    error: Optional[str] = None
-    estimated_remaining_seconds: Optional[int] = None
+    error: str | None = None
+    estimated_remaining_seconds: int | None = None
     phase_durations: dict[str, float] = Field(default_factory=dict)
     created_at: datetime
-    ready_at: Optional[datetime] = None
+    ready_at: datetime | None = None
 
 
 class DeploymentListResponse(BaseModel):
@@ -105,6 +105,22 @@ class DeploymentListResponse(BaseModel):
     deployments: list[DeploymentResponse]
     total: int
     limit: int
+
+
+class GpuTypeInfo(BaseModel):
+    """Information for a specific GPU type on RunPod."""
+    id: str
+    display_name: str
+    memory_gb: int
+    secure_cloud: bool
+    community_cloud: bool
+    bid_price_per_hr: float | None = None
+    price_per_hr: float | None = None
+
+
+class GpuListResponse(BaseModel):
+    """GET /v1/deployments/gpus response."""
+    gpus: list[GpuTypeInfo]
 
 
 class ModelEntry(BaseModel):
@@ -124,10 +140,36 @@ class ModelsListResponse(BaseModel):
     cache_enabled: bool
 
 
+class HFModelResult(BaseModel):
+    """Single entry in HuggingFace model search."""
+    model_id: str
+    task: str | None = None
+    downloads: int = 0
+    likes: int = 0
+    vram_required_gb: int | None = None
+
+
+class HFModelSearchResponse(BaseModel):
+    """Response from GET /v1/models/search."""
+    results: list[HFModelResult]
+    query: str
+
+
+class DeploymentCostResponse(BaseModel):
+    """Estimate GPU deployment cost."""
+    deployment_id: str
+    status: str
+    gpu_allocated: str | None = None
+    hours_running: float | None = None
+    price_per_hour_usd: float | None = None
+    estimated_cost_usd: float | None = None
+    note: str | None = None
+
+
 # --- Internal webhook (container -> orchestrator) ---
 class DeploymentReadyPayload(BaseModel):
     """POST /internal/deployment-ready/{deployment_id} optional body."""
 
     status: Literal["downloading_model", "loading_model", "ready", "failed"] = "ready"
-    message: Optional[str] = None
-    endpoint_url: Optional[str] = None
+    message: str | None = None
+    endpoint_url: str | None = None

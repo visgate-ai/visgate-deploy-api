@@ -1,9 +1,10 @@
 """Unit/contract tests for deployment API (mocked Firestore)."""
 
 import os
+from unittest.mock import AsyncMock, patch
+
 import pytest
 from fastapi.testclient import TestClient
-from unittest.mock import patch, AsyncMock
 
 os.environ["GCP_PROJECT_ID"] = "visgate"
 
@@ -28,7 +29,7 @@ def test_post_deployments_202(
     assert data["model_id"] == deployment_create_payload["hf_model_id"]
     assert data["webhook_url"] == deployment_create_payload["user_webhook_url"]
     assert data["path"] == "cold"
-    
+
     # Verify task was enqueued
     mock_enqueue.assert_called_once()
     args, _ = mock_enqueue.call_args

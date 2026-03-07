@@ -1,13 +1,17 @@
 """Runpod Provider Implementation."""
 
-from typing import Any, Optional
+from typing import Any
 
 import httpx
 
 from src.core.errors import RunpodAPIError
 from src.core.logging import structured_log
 from src.core.telemetry import record_runpod_api_error, span
-from src.services.base_provider import BaseInferenceProvider, ProviderEndpoint, ProviderEndpointSummary
+from src.services.base_provider import (
+    BaseInferenceProvider,
+    ProviderEndpoint,
+    ProviderEndpointSummary,
+)
 from src.services.provider_factory import register_provider
 
 
@@ -19,7 +23,7 @@ class RunpodProvider(BaseInferenceProvider):
         self,
         api_key: str,
         query: str,
-        variables: Optional[dict[str, Any]] = None,
+        variables: dict[str, Any] | None = None,
         timeout: float = 30.0,
     ) -> dict[str, Any]:
         payload: dict[str, Any] = {"query": query}
@@ -32,7 +36,7 @@ class RunpodProvider(BaseInferenceProvider):
                 params={"api_key": api_key},
                 headers={"Content-Type": "application/json"},
             )
-        
+
         if resp.status_code >= 400:
             body = resp.text
             record_runpod_api_error()
@@ -40,7 +44,7 @@ class RunpodProvider(BaseInferenceProvider):
                 message=f"HTTP {resp.status_code}: {body[:500]}",
                 details={"status": resp.status_code},
             )
-        
+
         data = resp.json()
         if "errors" in data and data["errors"]:
             record_runpod_api_error()
@@ -68,10 +72,10 @@ class RunpodProvider(BaseInferenceProvider):
           saveEndpoint(input: $input) { id }
         }
         """
-        
-        
+
+
         runpod_env = [{"key": k, "value": str(v)} for k, v in env.items()]
-        
+
         # Multi-GPU targeting support: join list into comma-separated string
         actual_gpu_ids = ",".join(gpu_ids) if isinstance(gpu_ids, list) else gpu_ids
 
@@ -88,7 +92,7 @@ class RunpodProvider(BaseInferenceProvider):
             "workersMax": kwargs.get("workers_max", 2),
             "env": runpod_env
         }
-        
+
         if kwargs.get("volume_in_gb"):
             input_obj["volumeInGb"] = kwargs["volume_in_gb"]
             input_obj["volumeMountPath"] = kwargs.get("volume_mount_path", "/runpod-volume")
@@ -99,7 +103,7 @@ class RunpodProvider(BaseInferenceProvider):
             result = data.get("saveEndpoint")
             if not result:
                 raise RunpodAPIError("saveEndpoint returned no data")
-            
+
             endpoint_id = result["id"]
             return {
                 "id": endpoint_id,
@@ -140,6 +144,23 @@ class RunpodProvider(BaseInferenceProvider):
                 }
             )
         return summaries
+
+    async def list_gpu_types(self, api_key: str) -> list[dict[str, Any]]:
+        query = """
+        {
+          gpuTypes {
+            id
+            displayName
+            memoryInGb
+            secureCloud
+            communityCloud
+            securePrice
+            communityPrice
+          }
+        }
+        """
+        data = await self._graphql_request(api_key, query)
+        return data.get("gpuTypes") or []
 
     def get_run_url(self, endpoint_id: str) -> str:
         return f"https://api.runpod.ai/v2/{endpoint_id}/run"

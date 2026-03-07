@@ -1,13 +1,12 @@
 """Unit tests for Cloud Tasks orchestration and Secret Manager secret storage."""
 
-import asyncio
 import json
 import os
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from google.api_core.exceptions import AlreadyExists
 from fastapi.testclient import TestClient
-from unittest.mock import AsyncMock, MagicMock, patch, call
+from google.api_core.exceptions import AlreadyExists
 
 os.environ.setdefault("GCP_PROJECT_ID", "visgate")
 
@@ -82,8 +81,8 @@ def test_store_task_secrets_continues_if_secret_exists(mock_sm_cls):
 @patch("asyncio.create_task")
 async def test_enqueue_falls_back_to_asyncio_without_queue(mock_create_task, mock_orch, monkeypatch):
     """Without CLOUD_TASKS_QUEUE_PATH, enqueue_orchestration_task uses asyncio.create_task."""
-    from src.core.config import get_settings
     import src.services.tasks as tasks_mod
+    from src.core.config import get_settings
 
     monkeypatch.delenv("CLOUD_TASKS_QUEUE_PATH", raising=False)
     get_settings.cache_clear()
@@ -108,8 +107,8 @@ async def test_enqueue_cloud_tasks_hides_credentials(mock_orch, mock_tasks_cls, 
     - Task body contains only deployment_id and secret_ref
     - Task body does NOT contain runpod_api_key, hf_token, or AWS keys
     """
-    from src.core.config import get_settings
     import src.services.tasks as tasks_mod
+    from src.core.config import get_settings
 
     monkeypatch.setenv("CLOUD_TASKS_QUEUE_PATH", "projects/visgate/locations/us-central1/queues/q")
     monkeypatch.setenv("INTERNAL_WEBHOOK_BASE_URL", "https://service.run.app")
@@ -151,8 +150,8 @@ async def test_enqueue_cloud_tasks_hides_credentials(mock_orch, mock_tasks_cls, 
 @patch("src.services.tasks.orchestrate_deployment", new_callable=AsyncMock)
 async def test_enqueue_cloud_tasks_adds_oidc_when_sa_configured(mock_orch, mock_tasks_cls, mock_store, monkeypatch):
     """OIDC token is attached to the task when CLOUD_TASKS_SERVICE_ACCOUNT is set."""
-    from src.core.config import get_settings
     import src.services.tasks as tasks_mod
+    from src.core.config import get_settings
 
     monkeypatch.setenv("CLOUD_TASKS_QUEUE_PATH", "projects/visgate/locations/us-central1/queues/q")
     monkeypatch.setenv("INTERNAL_WEBHOOK_BASE_URL", "https://service.run.app")
@@ -178,8 +177,8 @@ async def test_enqueue_cloud_tasks_adds_oidc_when_sa_configured(mock_orch, mock_
 @patch("src.services.tasks.orchestrate_deployment", new_callable=AsyncMock)
 async def test_enqueue_falls_back_to_asyncio_on_cloud_tasks_error(mock_orch, mock_create_task, mock_tasks_cls, mock_store, monkeypatch):
     """When Cloud Tasks raises, falls back gracefully to asyncio.create_task."""
-    from src.core.config import get_settings
     import src.services.tasks as tasks_mod
+    from src.core.config import get_settings
 
     monkeypatch.setenv("CLOUD_TASKS_QUEUE_PATH", "projects/visgate/locations/us-central1/queues/q")
     monkeypatch.setenv("INTERNAL_WEBHOOK_BASE_URL", "https://service.run.app")
@@ -200,8 +199,8 @@ async def test_enqueue_falls_back_to_asyncio_on_cloud_tasks_error(mock_orch, moc
 @patch("google.cloud.tasks_v2.CloudTasksClient")
 async def test_enqueue_cache_model_task_uses_deduped_task_name(mock_tasks_cls, monkeypatch):
     """Cache-model tasks use a deterministic Cloud Tasks name to avoid duplicate uploads."""
-    from src.core.config import get_settings
     import src.services.tasks as tasks_mod
+    from src.core.config import get_settings
 
     monkeypatch.setenv("CLOUD_TASKS_QUEUE_PATH", "projects/visgate/locations/us-central1/queues/q")
     monkeypatch.setenv("INTERNAL_WEBHOOK_BASE_URL", "https://service.run.app")
@@ -229,8 +228,8 @@ async def test_enqueue_cache_model_task_uses_deduped_task_name(mock_tasks_cls, m
 @patch("google.cloud.tasks_v2.CloudTasksClient")
 async def test_enqueue_cache_model_task_ignores_already_exists(mock_tasks_cls, monkeypatch):
     """Duplicate cache-model tasks are ignored when Cloud Tasks reports an existing task."""
-    from src.core.config import get_settings
     import src.services.tasks as tasks_mod
+    from src.core.config import get_settings
 
     monkeypatch.setenv("CLOUD_TASKS_QUEUE_PATH", "projects/visgate/locations/us-central1/queues/q")
     monkeypatch.setenv("INTERNAL_WEBHOOK_BASE_URL", "https://service.run.app")

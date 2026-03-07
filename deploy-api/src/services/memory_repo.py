@@ -1,8 +1,9 @@
 """In-memory repository for deployments (non-persistent)."""
 import os
 from datetime import UTC, datetime
-from typing import Optional, Any
-from src.models.entities import DeploymentDoc, LogEntry
+from typing import Any
+
+from src.models.entities import DeploymentDoc
 from src.services.gpu_registry import DEFAULT_GPU_REGISTRY, DEFAULT_TIER_MAPPING
 
 # Global store
@@ -13,22 +14,22 @@ _api_keys: dict[str, dict] = {}
 class MemoryClient:
     pass
 
-def get_firestore_client(project_id: Optional[str] = None) -> MemoryClient:
+def get_firestore_client(project_id: str | None = None) -> MemoryClient:
     return MemoryClient()
 
 def get_deployment(
     client: Any,
     collection: str,
     deployment_id: str,
-) -> Optional[DeploymentDoc]:
+) -> DeploymentDoc | None:
     data = _deployments.get(deployment_id)
     if not data:
         return None
     return DeploymentDoc.from_firestore_dict(data)
 
 def set_deployment(
-    client: Any, 
-    collection: str, 
+    client: Any,
+    collection: str,
     doc: DeploymentDoc,
 ) -> None:
     _deployments[doc.deployment_id] = doc.to_firestore_dict()
@@ -63,7 +64,7 @@ def get_api_key(
     client: Any,
     collection: str,
     key: str,
-) -> Optional[dict]:
+) -> dict | None:
     """Accept any non-empty key in local dev mode (or match ORCHESTRATOR_API_KEY env var)."""
     expected = os.getenv("ORCHESTRATOR_API_KEY", "")
     if expected:
@@ -92,7 +93,7 @@ def list_deployments(
     client: Any,
     collection: str,
     user_hash: str,
-    status_filter: Optional[str] = None,
+    status_filter: str | None = None,
     limit: int = 20,
 ) -> list:
     """Return deployments for given user_hash from in-memory store."""
@@ -111,7 +112,7 @@ def find_reusable_deployment(
     collection: str,
     api_key_id: str,
     hf_model_id: str,
-    gpu_tier: Optional[str],
+    gpu_tier: str | None,
     user_runpod_key: str,
 ) -> None:
     """In-memory mode does not support endpoint reuse — always returns None."""

@@ -4,7 +4,7 @@ import hashlib
 import time
 from collections import defaultdict
 from dataclasses import dataclass
-from typing import Annotated, Optional
+from typing import Annotated
 
 from fastapi import Depends, Header, HTTPException, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -26,6 +26,7 @@ class RequestContext:
     runpod_api_key: str
     user_hash: str
     client_ip: str
+    hf_token: str | None = None
 
 
 def get_firestore() -> firestore.Client:
@@ -46,8 +47,9 @@ def _check_rate_limit(subject: str, limit: int) -> None:
 
 async def get_request_context(
     request: Request,
-    credentials: Annotated[Optional[HTTPAuthorizationCredentials], Depends(security)] = None,
-    x_runpod_api_key: Annotated[Optional[str], Header(alias="X-Runpod-Api-Key")] = None,
+    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(security)] = None,
+    x_runpod_api_key: Annotated[str | None, Header(alias="X-Runpod-Api-Key")] = None,
+    x_hf_api_key: Annotated[str | None, Header(alias="X-Huggingface-Api-Key")] = None,
 ) -> RequestContext:
     """Resolve stateless auth and rate-limit context using RUNPOD API key."""
     import os
@@ -60,12 +62,12 @@ async def get_request_context(
         _check_rate_limit(user_hash, get_settings().rate_limit_requests_per_minute)
         return RequestContext(runpod_api_key=runpod_api_key, user_hash=user_hash, client_ip=client_ip)
 
-    token: Optional[str] = None
+    token: str | None = None
     if x_runpod_api_key:
         token = x_runpod_api_key
     elif credentials and credentials.credentials:
         token = credentials.credentials
-    
+
     if not token:
         raise UnauthorizedError("Missing or invalid Runpod API key")
 
@@ -76,11 +78,13 @@ async def get_request_context(
     # Rate limit per user_hash and IP (best-effort)
     _check_rate_limit(user_hash, settings.rate_limit_requests_per_minute)
     _check_rate_limit(client_ip, settings.rate_limit_requests_per_minute * 2)
-    return RequestContext(runpod_api_key=token, user_hash=user_hash, client_ip=client_ip)
+    return RequestContext(
+        runpod_api_key=token, user_hash=user_hash, client_ip=client_ip, hf_token=x_hf_api_key
+    )
 
 
 def verify_internal_webhook_secret(
-    x_visgate_secret: Annotated[Optional[str], Header(alias="X-Visgate-Internal-Secret")] = None,
+    x_visgate_secret: Annotated[str | None, Header(alias="X-Visgate-Internal-Secret")] = None,
 ) -> None:
     """Optional: require header for internal deployment-ready endpoint."""
     settings = get_settings()

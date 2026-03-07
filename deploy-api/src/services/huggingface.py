@@ -1,7 +1,7 @@
 """Hugging Face Hub validation and model metadata."""
 
 import asyncio
-from typing import Any, Optional
+from typing import Any
 
 from src.core.errors import HuggingFaceModelNotFoundError
 from src.core.logging import structured_log
@@ -30,7 +30,7 @@ class ModelInfo:
         model_id: str,
         min_gpu_memory_gb: int,
         exists: bool = True,
-        raw: Optional[dict[str, Any]] = None,
+        raw: dict[str, Any] | None = None,
     ) -> None:
         self.model_id = model_id
         self.min_gpu_memory_gb = min_gpu_memory_gb
@@ -42,7 +42,7 @@ class ModelInfo:
 
 async def validate_model(
     model_id: str,
-    token: Optional[str] = None,
+    token: str | None = None,
     timeout_seconds: int = 10,
 ) -> ModelInfo:
     """
@@ -111,7 +111,7 @@ async def validate_model(
                 loop.run_in_executor(None, _check),
                 timeout=timeout_seconds + 2,
             )
-        except asyncio.TimeoutError:
+        except TimeoutError:
             raise HuggingFaceModelNotFoundError(
                 model_id,
                 message=f"Model validation timed out after {timeout_seconds}s",

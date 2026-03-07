@@ -5,17 +5,16 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass
 from threading import Lock
-from typing import Optional
 
 
 @dataclass
 class CachedSecrets:
     runpod_api_key: str
-    hf_token: Optional[str]
-    aws_access_key_id: Optional[str]
-    aws_secret_access_key: Optional[str]
-    aws_endpoint_url: Optional[str]
-    s3_model_url: Optional[str]
+    hf_token: str | None
+    aws_access_key_id: str | None
+    aws_secret_access_key: str | None
+    aws_endpoint_url: str | None
+    s3_model_url: str | None
     expires_at: float
 
 
@@ -27,11 +26,11 @@ _lock = Lock()
 def store_secrets(
     deployment_id: str,
     runpod_api_key: str,
-    hf_token: Optional[str],
-    aws_access_key_id: Optional[str] = None,
-    aws_secret_access_key: Optional[str] = None,
-    aws_endpoint_url: Optional[str] = None,
-    s3_model_url: Optional[str] = None,
+    hf_token: str | None,
+    aws_access_key_id: str | None = None,
+    aws_secret_access_key: str | None = None,
+    aws_endpoint_url: str | None = None,
+    s3_model_url: str | None = None,
     ttl_seconds: float = _DEFAULT_TTL_SECONDS,
 ) -> None:
     """Store secrets in memory for best-effort background tasks."""
@@ -48,7 +47,7 @@ def store_secrets(
         )
 
 
-def get_secrets(deployment_id: str) -> Optional[CachedSecrets]:
+def get_secrets(deployment_id: str) -> CachedSecrets | None:
     """Fetch secrets if present and not expired."""
     now = time.monotonic()
     with _lock:

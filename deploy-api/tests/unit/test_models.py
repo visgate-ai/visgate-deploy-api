@@ -3,16 +3,16 @@
 import pytest
 from pydantic import ValidationError
 
+from src.models.entities import DeploymentDoc, LogEntry
 from src.models.model_specs_registry import (
     _BYTES_PER_PARAM,
+    MODEL_SPECS_REGISTRY,
     _estimate_vram_from_weight_bytes,
     get_min_gpu_memory_gb,
     get_model_specs,
     get_vram_gb,
-    MODEL_SPECS_REGISTRY,
 )
-from src.models.schemas import DeploymentCreate, DeploymentResponse202, LogEntrySchema
-from src.models.entities import DeploymentDoc, LogEntry
+from src.models.schemas import DeploymentCreate
 
 
 def test_model_specs_registry_has_seed_models() -> None:

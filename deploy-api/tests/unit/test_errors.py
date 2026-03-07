@@ -1,13 +1,12 @@
 """Unit tests for custom exceptions."""
 
-import pytest
 
 from src.core.errors import (
+    DeploymentNotFoundError,
     HuggingFaceModelNotFoundError,
+    OrchestratorError,
     RunpodInsufficientGPUError,
     WebhookDeliveryError,
-    DeploymentNotFoundError,
-    OrchestratorError,
 )
 
 

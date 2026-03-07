@@ -6,7 +6,6 @@ import time
 from collections import deque
 from dataclasses import dataclass
 from threading import Lock
-from typing import Deque
 
 from src.core.config import get_settings
 
@@ -18,7 +17,7 @@ class LiveLogEntry:
     message: str
 
 
-_store: dict[str, Deque[LiveLogEntry]] = {}
+_store: dict[str, deque[LiveLogEntry]] = {}
 _lock = Lock()
 
 

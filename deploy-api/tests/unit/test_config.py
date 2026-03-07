@@ -1,6 +1,5 @@
 """Unit tests for config."""
 
-import os
 
 import pytest
 

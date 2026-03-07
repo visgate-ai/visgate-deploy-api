@@ -1,8 +1,7 @@
 """Firestore document and in-memory entity models."""
 
 from dataclasses import dataclass, field
-from datetime import datetime
-from typing import Any, Optional
+from typing import Any
 
 
 @dataclass
@@ -33,24 +32,24 @@ class DeploymentDoc:
     status: str
     hf_model_id: str
     user_webhook_url: str
-    user_runpod_key_ref: Optional[str] = None  # Deprecated: avoid storing user secrets
-    gpu_tier: Optional[str] = None
-    hf_token_ref: Optional[str] = None  # Deprecated: avoid storing user secrets
-    runpod_endpoint_id: Optional[str] = None
-    endpoint_url: Optional[str] = None
-    gpu_allocated: Optional[str] = None
-    model_vram_gb: Optional[int] = None
+    user_runpod_key_ref: str | None = None  # Deprecated: avoid storing user secrets
+    gpu_tier: str | None = None
+    hf_token_ref: str | None = None  # Deprecated: avoid storing user secrets
+    runpod_endpoint_id: str | None = None
+    endpoint_url: str | None = None
+    gpu_allocated: str | None = None
+    model_vram_gb: int | None = None
     logs: list[LogEntry] = field(default_factory=list)
-    error: Optional[str] = None
+    error: str | None = None
     created_at: str = ""
-    ready_at: Optional[str] = None
-    api_key_id: Optional[str] = None
-    user_hash: Optional[str] = None
-    provider: Optional[str] = None
-    endpoint_name: Optional[str] = None
-    pool_policy: Optional[str] = None
-    region: Optional[str] = None
-    task: Optional[str] = None
+    ready_at: str | None = None
+    api_key_id: str | None = None
+    user_hash: str | None = None
+    provider: str | None = None
+    endpoint_name: str | None = None
+    pool_policy: str | None = None
+    region: str | None = None
+    task: str | None = None
 
     def to_firestore_dict(self) -> dict[str, Any]:
         return {

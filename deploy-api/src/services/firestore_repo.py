@@ -1,7 +1,6 @@
 """Firestore access for deployment documents."""
 
 from datetime import UTC, datetime
-from typing import Optional
 
 from google.cloud import firestore  # type: ignore
 from google.cloud.firestore_v1.base_query import FieldFilter
@@ -9,7 +8,7 @@ from google.cloud.firestore_v1.base_query import FieldFilter
 from src.models.entities import DeploymentDoc, LogEntry
 
 
-def get_firestore_client(project_id: Optional[str] = None):  # type: ignore
+def get_firestore_client(project_id: str | None = None):  # type: ignore
     """Return Firestore client (singleton optional)."""
     if project_id:
         return firestore.Client(project=project_id)
@@ -25,7 +24,7 @@ def get_deployment(
     client: firestore.Client,
     collection: str,
     deployment_id: str,
-) -> Optional[DeploymentDoc]:
+) -> DeploymentDoc | None:
     """Load deployment document by ID."""
     ref = deployment_ref(client, collection, deployment_id)
     doc = ref.get()
@@ -76,7 +75,7 @@ def get_api_key(
     client: firestore.Client,
     collection: str,
     key: str,
-) -> Optional[dict]:
+) -> dict | None:
     """Retrieve API key document."""
     doc = client.collection(collection).document(key).get()
     if not doc.exists:
@@ -112,7 +111,7 @@ def list_deployments(
     client: firestore.Client,
     collection: str,
     user_hash: str,
-    status_filter: Optional[str] = None,
+    status_filter: str | None = None,
     limit: int = 20,
 ) -> list[DeploymentDoc]:
     """List deployments belonging to a given user (by user_hash), newest first."""
@@ -136,9 +135,9 @@ def find_reusable_deployment(
     collection: str,
     api_key_id: str,
     hf_model_id: str,
-    gpu_tier: Optional[str],
+    gpu_tier: str | None,
     user_runpod_key: str,
-) -> Optional[DeploymentDoc]:
+) -> DeploymentDoc | None:
     """
     Find an active deployment for the same caller/model/key so we can reuse endpoint.
     """

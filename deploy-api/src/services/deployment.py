@@ -2,7 +2,6 @@
 
 import asyncio
 from datetime import UTC, datetime
-from typing import Optional
 
 import httpx
 
@@ -19,11 +18,9 @@ from src.core.telemetry import (
     record_webhook_failure,
     span,
 )
-from src.services.gpu_selection import select_gpu
 from src.services.gpu_selection import select_gpu_candidates
 from src.services.huggingface import validate_model
 from src.services.provider_factory import get_provider
-import src.services.runpod  # Trigger provider registration
 from src.services.r2_manifest import (
     fetch_cached_model_ids,
     model_s3_url,
@@ -68,19 +65,19 @@ def _now_iso() -> str:
     return datetime.now(UTC).isoformat().replace("+00:00", "Z")
 
 
-def _as_run_url(endpoint_url: Optional[str]) -> Optional[str]:
+def _as_run_url(endpoint_url: str | None) -> str | None:
     if not endpoint_url:
         return None
     return endpoint_url if endpoint_url.endswith("/run") else f"{endpoint_url}/run"
 
 
-def _as_endpoint_root(endpoint_url: Optional[str]) -> Optional[str]:
+def _as_endpoint_root(endpoint_url: str | None) -> str | None:
     if not endpoint_url:
         return None
     return endpoint_url[:-4] if endpoint_url.endswith("/run") else endpoint_url
 
 
-async def _probe_runpod_readiness(endpoint_url: str, api_key: str) -> tuple[bool, Optional[str]]:
+async def _probe_runpod_readiness(endpoint_url: str, api_key: str) -> tuple[bool, str | None]:
     """
     Probe worker readiness via the RunPod /health endpoint (GET, no job queued).
     Returns (ready, error_message).
@@ -110,12 +107,12 @@ async def _probe_runpod_readiness(endpoint_url: str, api_key: str) -> tuple[bool
 
 async def orchestrate_deployment(
     deployment_id: str,
-    runpod_api_key: Optional[str] = None,
-    hf_token_override: Optional[str] = None,
-    aws_access_key_id: Optional[str] = None,
-    aws_secret_access_key: Optional[str] = None,
-    aws_endpoint_url: Optional[str] = None,
-    s3_model_url: Optional[str] = None,
+    runpod_api_key: str | None = None,
+    hf_token_override: str | None = None,
+    aws_access_key_id: str | None = None,
+    aws_secret_access_key: str | None = None,
+    aws_endpoint_url: str | None = None,
+    s3_model_url: str | None = None,
 ) -> None:
     """
     Background task: validate HF model -> select GPU -> create cloud endpoint via provider.
@@ -177,9 +174,9 @@ async def orchestrate_deployment(
 
         user_runpod_key = runpod_api_key
         gpu_tier = doc.gpu_tier
-        hf_token: Optional[str] = hf_token_override or (cached.hf_token if cached else None) or settings.hf_pro_access_token
+        hf_token: str | None = hf_token_override or (cached.hf_token if cached else None) or settings.hf_pro_access_token
         # Logic: Default to runpod for now, but could be fetched from doc metadata
-        provider_name = "runpod" 
+        provider_name = "runpod"
         provider = get_provider(provider_name)
 
         # 1. Validate HF model
@@ -196,7 +193,7 @@ async def orchestrate_deployment(
         # computed_s3_model_url is set to the per-model R2 path and passed to
         # the worker's S3_MODEL_URL so it can sync from R2 instead of HF.
         # On cache miss: separate Cloud Task will download from HF and upload to R2.
-        computed_s3_model_url: Optional[str] = None
+        computed_s3_model_url: str | None = None
         trigger_cache_model_task: bool = False
         if settings.r2_access_key_id_rw and settings.r2_endpoint_url and not s3_model_url:
             per_model_url = model_s3_url(settings.r2_model_base_url, hf_model_id)
@@ -229,7 +226,7 @@ async def orchestrate_deployment(
 
         # 3. Create Cloud Endpoint
         update_deployment(client, coll, deployment_id, {"status": "creating_endpoint"})
-        
+
         env = {
             "HF_MODEL_ID": hf_model_id,
             "VISGATE_DEPLOYMENT_ID": deployment_id,
@@ -238,7 +235,7 @@ async def orchestrate_deployment(
             env["TASK"] = doc.task
         if hf_token:
             env["HF_TOKEN"] = hf_token
-        
+
         # Credentials injected into RunPod worker env:
         #   cache_scope=private  → user's own S3-compat keys (user's bucket)
         #   cache_scope=shared   → platform Cloudflare R2 READ-ONLY key (RW key stays in API)
@@ -290,14 +287,14 @@ async def orchestrate_deployment(
         # Common data for all providers
         endpoint_name = doc.endpoint_name or f"visgate-{deployment_id}"
         locations = (doc.region or settings.runpod_default_locations).strip()
-        
+
         # MULTI-GPU TARGETING: Select top 3 candidates to increase availability
         target_candidates = gpu_candidates[:3]
         target_ids = [c[0] for c in target_candidates]
         target_display = ", ".join([c[1] for c in target_candidates])
-        
+
         log_step(
-            "INFO", 
+            "INFO",
             f"Deploying to GPU pool: {target_display}",
             target_ids=target_ids
         )
@@ -348,10 +345,10 @@ async def orchestrate_deployment(
             if last_error:
                 raise last_error
             raise RunpodAPIError("No suitable GPU candidate endpoint could be created")
-        
+
         endpoint_id = endpoint_data["id"]
         endpoint_url = endpoint_data["url"]
-        
+
         # 4. Finalize
         update_deployment(
             client,
@@ -478,7 +475,7 @@ def _inference_example_input(model_id: str) -> dict:
 
 async def mark_deployment_ready_and_notify(
     deployment_id: str,
-    endpoint_url: Optional[str] = None,
+    endpoint_url: str | None = None,
 ) -> bool:
     """
     Called from internal webhook handler: set status=ready, ready_at, then notify user.
@@ -569,8 +566,8 @@ async def mark_deployment_ready_and_notify(
 async def update_deployment_phase_from_worker(
     deployment_id: str,
     status: str,
-    message: Optional[str] = None,
-    endpoint_url: Optional[str] = None,
+    message: str | None = None,
+    endpoint_url: str | None = None,
 ) -> bool:
     """
     Update deployment for worker-reported intermediate/failure phases.

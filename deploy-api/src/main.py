@@ -6,7 +6,13 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from src.api.routes import deployments_router, health_router, internal_router, models_router, tasks_router
+from src.api.routes import (
+    deployments_router,
+    health_router,
+    internal_router,
+    models_router,
+    tasks_router,
+)
 from src.core.config import get_settings
 from src.core.errors import OrchestratorError, RateLimitError
 from src.core.logging import configure_logging

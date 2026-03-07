@@ -1,17 +1,17 @@
 """Data models: Pydantic schemas, Firestore entities, model specs registry."""
 
 from src.models.entities import DeploymentDoc, LogEntry
+from src.models.model_specs_registry import (
+    MODEL_SPECS_REGISTRY,
+    get_model_specs,
+    get_vram_gb,
+)
 from src.models.schemas import (
     DeploymentCreate,
     DeploymentReadyPayload,
     DeploymentResponse,
     DeploymentResponse202,
     LogEntrySchema,
-)
-from src.models.model_specs_registry import (
-    MODEL_SPECS_REGISTRY,
-    get_model_specs,
-    get_vram_gb,
 )
 
 __all__ = [

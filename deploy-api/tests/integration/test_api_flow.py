@@ -4,7 +4,6 @@ import json
 from pathlib import Path
 
 import pytest
-from fastapi.testclient import TestClient
 
 # Contract: validate Pydantic schemas against sample responses
 FIXTURES_DIR = Path(__file__).resolve().parent.parent / "fixtures"
@@ -27,7 +26,7 @@ def test_contract_deployment_response_202_schema() -> None:
 @pytest.mark.skipif(not FIXTURES_DIR.joinpath("sample_responses.json").exists(), reason="No fixtures")
 def test_contract_deployment_response_ready_schema() -> None:
     """Ready response matches DeploymentResponse schema."""
-    from src.models.schemas import DeploymentResponse, LogEntrySchema
+    from src.models.schemas import DeploymentResponse
     path = FIXTURES_DIR / "sample_responses.json"
     data = json.loads(path.read_text())
     obj = data["deployment_response_ready"]

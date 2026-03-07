@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, time
-from typing import Iterable
 from zoneinfo import ZoneInfo
 
 from src.core.config import get_settings

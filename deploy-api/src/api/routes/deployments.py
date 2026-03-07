@@ -14,10 +14,13 @@ from src.core.errors import DeploymentNotFoundError, InvalidDeploymentRequestErr
 from src.core.telemetry import record_deployment_created
 from src.models.entities import DeploymentDoc, LogEntry
 from src.models.schemas import (
+    DeploymentCostResponse,
     DeploymentCreate,
     DeploymentListResponse,
     DeploymentResponse,
     DeploymentResponse202,
+    GpuListResponse,
+    GpuTypeInfo,
     LogEntrySchema,
 )
 from src.services.deployment import mark_deployment_ready_and_notify
@@ -27,7 +30,6 @@ from src.services.log_tunnel import get_live_logs_since
 from src.services.model_capabilities import supports_task
 from src.services.pool_policy import choose_pool_policy
 from src.services.provider_factory import get_provider
-import src.services.runpod # Register providers
 from src.services.secret_cache import store_secrets
 from src.services.tasks import enqueue_orchestration_task
 
@@ -127,6 +129,32 @@ def _build_s3_model_url(base_url: str, path_suffix: str) -> str:
 
 def _parse_csv_set(value: str) -> set[str]:
     return {item.strip() for item in (value or "").split(",") if item.strip()}
+
+
+@router.get("/gpus", response_model=GpuListResponse, summary="List available GPU types")
+async def list_gpus(
+    ctx: Annotated[RequestContext, Depends(get_request_context)],
+) -> GpuListResponse:
+    """List available GPU types with VRAM and current pricing from RunPod."""
+    provider = get_provider("runpod")
+    raw_gpus = await provider.list_gpu_types(ctx.runpod_api_key)
+
+    gpus: list[GpuTypeInfo] = []
+    for g in raw_gpus:
+        gpus.append(
+            GpuTypeInfo(
+                id=g.get("id", ""),
+                display_name=g.get("displayName", ""),
+                memory_gb=g.get("memoryInGb") or 0,
+                secure_cloud=g.get("secureCloud") or False,
+                community_cloud=g.get("communityCloud") or False,
+                bid_price_per_hr=g.get("communityPrice"),
+                price_per_hr=g.get("securePrice"),
+            )
+        )
+    # Sort by memory, then price
+    gpus.sort(key=lambda x: (x.memory_gb, x.price_per_hr or 999))
+    return GpuListResponse(gpus=gpus)
 
 
 @router.get("", response_model=DeploymentListResponse, summary="List deployments")
@@ -446,6 +474,70 @@ async def stream_deployment_logs(
             await asyncio.sleep(1)
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
+
+
+@router.get("/{deployment_id}/cost", response_model=DeploymentCostResponse, summary="Estimate deployment cost")
+async def get_deployment_cost(
+    deployment_id: str,
+    ctx: Annotated[RequestContext, Depends(get_request_context)],
+    firestore_client=Depends(get_firestore),
+) -> DeploymentCostResponse:
+    """Estimate GPU deployment cost using Firestore record and live RunPod pricing."""
+    settings = get_settings()
+    doc = get_deployment(firestore_client, settings.firestore_collection_deployments, deployment_id)
+    if not doc:
+        raise DeploymentNotFoundError(deployment_id)
+    if doc.user_hash and doc.user_hash != ctx.user_hash:
+        raise DeploymentNotFoundError(deployment_id)
+
+    status_val = doc.status
+    gpu_allocated = doc.gpu_allocated
+    ready_at = _parse_iso(doc.ready_at)
+    created_at = _parse_iso(doc.created_at)
+
+    hours_running: float | None = None
+    if ready_at:
+        end_dt = datetime.now(UTC) if status_val not in ("deleted", "failed") else ready_at
+        hours_running = max((end_dt - ready_at).total_seconds() / 3600, 0.0)
+    elif created_at and status_val == "ready":
+        # Fallback to created_at if ready_at missing but status is ready
+        hours_running = max((datetime.now(UTC) - created_at).total_seconds() / 3600, 0.0)
+
+    # Fetch GPU pricing from RunPod
+    price_per_hour: float | None = None
+    note: str | None = None
+
+    if gpu_allocated:
+        provider = get_provider("runpod")
+        try:
+            gpu_types = await provider.list_gpu_types(ctx.runpod_api_key)
+            for g in gpu_types:
+                name = g.get("displayName", "").lower()
+                gpu_id = g.get("id", "").lower()
+                alloc = gpu_allocated.lower()
+                if alloc in name or name in alloc or alloc == gpu_id:
+                     price_per_hour = g.get("communityPrice") or g.get("securePrice")
+                     break
+            if price_per_hour is None:
+                note = f"GPU type '{gpu_allocated}' not found in current pricing list"
+        except Exception as e:
+            note = f"Could not fetch GPU pricing: {str(e)[:100]}"
+    else:
+        note = "GPU not yet allocated (deployment may be starting or failed)"
+
+    estimated_cost: float | None = None
+    if hours_running is not None and price_per_hour is not None:
+        estimated_cost = round(hours_running * price_per_hour, 6)
+
+    return DeploymentCostResponse(
+        deployment_id=deployment_id,
+        status=status_val,
+        gpu_allocated=gpu_allocated,
+        hours_running=round(hours_running, 4) if hours_running is not None else None,
+        price_per_hour_usd=price_per_hour,
+        estimated_cost_usd=estimated_cost,
+        note=note,
+    )
 
 
 @router.delete("/{deployment_id}", status_code=status.HTTP_204_NO_CONTENT)

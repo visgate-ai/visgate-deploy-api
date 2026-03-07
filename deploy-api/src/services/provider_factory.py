@@ -1,4 +1,3 @@
-from typing import Any, Optional
 from src.services.base_provider import BaseInferenceProvider
 
 _providers: dict[str, BaseInferenceProvider] = {}

@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from typing import Iterable
-
 from src.models.model_specs_registry import get_model_specs
 
 

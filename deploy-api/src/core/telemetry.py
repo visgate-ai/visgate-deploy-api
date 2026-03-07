@@ -1,17 +1,18 @@
 """OpenTelemetry and Cloud Trace integration with custom metrics."""
 
 import os
+from collections.abc import Generator
 from contextlib import contextmanager
-from typing import Any, Generator, Optional
+from typing import Any
 
 # Optional: only load if packages available
 try:
     from opentelemetry import trace
     from opentelemetry.exporter.cloud_trace import CloudTraceSpanExporter
     from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+    from opentelemetry.sdk.resources import Resource
     from opentelemetry.sdk.trace import TracerProvider
     from opentelemetry.sdk.trace.export import BatchSpanProcessor
-    from opentelemetry.sdk.resources import Resource
 
     _OTEL_AVAILABLE = True
 except ImportError:
@@ -51,7 +52,7 @@ def get_trace_context() -> dict[str, str]:
     return {"trace_id": format(ctx.trace_id, "032x"), "span_id": format(ctx.span_id, "016x")}
 
 
-def init_telemetry(service_name: str = "visgate-deploy-api", project_id: Optional[str] = None) -> None:
+def init_telemetry(service_name: str = "visgate-deploy-api", project_id: str | None = None) -> None:
     """Initialize Cloud Trace exporter and tracer provider."""
     if not _OTEL_AVAILABLE:
         return
@@ -103,7 +104,7 @@ def get_metrics() -> dict[str, Any]:
 
 
 @contextmanager
-def span(name: str, attributes: Optional[dict[str, Any]] = None) -> Generator[Any, None, None]:
+def span(name: str, attributes: dict[str, Any] | None = None) -> Generator[Any, None, None]:
     """Context manager for a child span."""
     if not _OTEL_AVAILABLE or trace is None:
         yield None

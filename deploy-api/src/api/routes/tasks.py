@@ -1,8 +1,7 @@
 """Internal tasks triggered by Cloud Tasks."""
 
-from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, status
 from pydantic import BaseModel
 
 from src.api.dependencies import verify_internal_webhook_secret
@@ -39,7 +38,7 @@ async def task_orchestrate_deployment(body: OrchestrateDeploymentRequest) -> dic
         deployment_id=body.deployment_id,
         operation="task.orchestrate",
     )
-    
+
     # Run synchronously so Cloud Run keeps instance alive
     await orchestrate_deployment(
         body.deployment_id,
@@ -50,5 +49,5 @@ async def task_orchestrate_deployment(body: OrchestrateDeploymentRequest) -> dic
         body.aws_endpoint_url,
         body.s3_model_url,
     )
-    
+
     return {"status": "ok"}

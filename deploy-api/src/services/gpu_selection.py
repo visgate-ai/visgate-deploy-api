@@ -1,12 +1,19 @@
-from typing import Optional
-from src.core.errors import RunpodInsufficientGPUError # We should rename this to InsufficientGPUError but keeping for compatibility
-from src.services.gpu_registry import gpu_id_to_display_name, select_gpu_candidates_for_vram, select_gpu_id_for_vram
+
+from src.core.errors import (
+    RunpodInsufficientGPUError,  # We should rename this to InsufficientGPUError but keeping for compatibility
+)
+from src.services.gpu_registry import (
+    gpu_id_to_display_name,
+    select_gpu_candidates_for_vram,
+    select_gpu_id_for_vram,
+)
+
 
 def select_gpu(
     vram_gb: int,
-    gpu_tier: Optional[str] = None,
-    registry: Optional[list] = None,
-    tier_mapping: Optional[dict] = None,
+    gpu_tier: str | None = None,
+    registry: list | None = None,
+    tier_mapping: dict | None = None,
 ) -> tuple[str, str]:
     """
     Common GPU selection wrapper.
@@ -21,9 +28,9 @@ def select_gpu(
 
 def select_gpu_candidates(
     vram_gb: int,
-    gpu_tier: Optional[str] = None,
-    registry: Optional[list] = None,
-    tier_mapping: Optional[dict] = None,
+    gpu_tier: str | None = None,
+    registry: list | None = None,
+    tier_mapping: dict | None = None,
 ) -> list[tuple[str, str]]:
     """Return ordered (gpu_id, display_name) candidates from cheapest to expensive."""
     ids = select_gpu_candidates_for_vram(vram_gb, gpu_tier, registry=registry, tier_mapping=tier_mapping)
