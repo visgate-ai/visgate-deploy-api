@@ -46,7 +46,7 @@ if _ENV_PATH.exists():
             os.environ.setdefault(_k.strip(), _v.strip())
 
 # ── Config ────────────────────────────────────────────────────────────────────
-BASE       = os.environ.get("API_BASE", "https://visgate-deploy-api-wxup7pxrsa-uc.a.run.app")
+BASE       = os.environ.get("API_BASE", "https://visgate-deploy-api-wxup7pxrsa-ey.a.run.app")
 RUNPOD_KEY = os.environ.get("RUNPOD") or os.environ.get("VISGATE_DEPLOY_API_RUNPOD_ACCESS_TOKEN_USER", "")
 HF_TOKEN   = os.environ.get("HF_TOKEN") or os.environ.get("VISGATE_DEPLOY_API_HF_ACCESS_TOKEN_USER", "")
 
