@@ -21,7 +21,11 @@ os.environ.setdefault("GCP_PROJECT_ID", "visgate")
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _make_deployment_doc(hf_model_id: str = "stabilityai/sd-turbo", status: str = "validating"):
+def _make_deployment_doc(
+    hf_model_id: str = "stabilityai/sd-turbo",
+    status: str = "validating",
+    internal_webhook_base_url: str | None = None,
+):
     doc = MagicMock()
     doc.hf_model_id = hf_model_id
     doc.status = status
@@ -30,6 +34,7 @@ def _make_deployment_doc(hf_model_id: str = "stabilityai/sd-turbo", status: str 
     doc.region = None
     doc.runpod_endpoint_id = "ep_test"
     doc.endpoint_url = "https://api.runpod.ai/v2/ep_test/run"
+    doc.internal_webhook_base_url = internal_webhook_base_url
     return doc
 
 
@@ -155,6 +160,44 @@ async def test_runpod_api_key_in_worker_env(monkeypatch):
         )
 
     assert captured_env.get("RUNPOD_API_KEY") == "rpa_cleanupkey"
+    get_settings.cache_clear()
+
+
+@pytest.mark.asyncio
+async def test_worker_gets_absolute_internal_callback_urls_from_doc(monkeypatch):
+    """Deployment docs can provide absolute callback URLs when env base URL is absent."""
+    from src.core.config import get_settings
+
+    get_settings.cache_clear()
+    monkeypatch.delenv("INTERNAL_WEBHOOK_BASE_URL", raising=False)
+    monkeypatch.setenv("INTERNAL_WEBHOOK_SECRET", "internal-secret")
+    get_settings.cache_clear()
+
+    captured_env: dict = {}
+
+    async def mock_create_endpoint(**kwargs):
+        captured_env.update(kwargs.get("env", {}))
+        return {"id": "ep3", "url": "https://api.runpod.ai/v2/ep3/run"}
+
+    mock_provider = MagicMock()
+    mock_provider.create_endpoint = AsyncMock(side_effect=mock_create_endpoint)
+
+    with ExitStack() as stack:
+        _apply_base_patches(stack, mock_provider)
+        stack.enter_context(
+            patch(
+                "src.services.deployment.get_deployment",
+                return_value=_make_deployment_doc(internal_webhook_base_url="https://api.example.com"),
+            )
+        )
+        from src.services.deployment import orchestrate_deployment
+        await orchestrate_deployment(
+            deployment_id="dep_cleanup",
+            runpod_api_key="rpa_cleanupkey",
+        )
+
+    assert captured_env.get("VISGATE_WEBHOOK") == "https://api.example.com/internal/deployment-ready/dep_cleanup"
+    assert captured_env.get("VISGATE_LOG_TUNNEL") == "https://api.example.com/internal/logs/dep_cleanup"
     get_settings.cache_clear()
 
 

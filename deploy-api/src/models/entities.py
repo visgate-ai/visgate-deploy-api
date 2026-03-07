@@ -50,6 +50,7 @@ class DeploymentDoc:
     pool_policy: str | None = None
     region: str | None = None
     task: str | None = None
+    internal_webhook_base_url: str | None = None
 
     def to_firestore_dict(self) -> dict[str, Any]:
         return {
@@ -75,6 +76,7 @@ class DeploymentDoc:
             "pool_policy": self.pool_policy,
             "region": self.region,
             "task": self.task,
+            "internal_webhook_base_url": self.internal_webhook_base_url,
         }
 
     @classmethod
@@ -103,6 +105,7 @@ class DeploymentDoc:
             pool_policy=d.get("pool_policy"),
             region=d.get("region"),
             task=d.get("task"),
+            internal_webhook_base_url=d.get("internal_webhook_base_url"),
         )
 
 

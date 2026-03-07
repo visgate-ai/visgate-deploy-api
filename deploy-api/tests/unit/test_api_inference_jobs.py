@@ -1,12 +1,16 @@
 """Unit tests for inference job lifecycle routes."""
 
 import hashlib
+import os
 from unittest.mock import AsyncMock, Mock, patch
 
 from fastapi.testclient import TestClient
 
+from src.core.config import get_settings
 from src.models.entities import DeploymentDoc
 from src.services.firestore_repo import set_deployment
+
+os.environ.setdefault("GCP_PROJECT_ID", "visgate")
 
 
 def _ready_deployment_doc(runpod_key: str, *, gpu_allocated: str | None = None) -> DeploymentDoc:
@@ -67,6 +71,46 @@ def test_create_inference_job_returns_202(
         "key_prefix": "jobs/dep_2026_ready123",
     }
     provider.submit_job.assert_awaited_once()
+
+
+def test_create_inference_job_uses_request_base_for_internal_callback(
+    client: TestClient,
+    firestore_mock,
+    auth_headers: dict,
+    monkeypatch,
+) -> None:
+    runpod_key = auth_headers["Authorization"].split(" ", 1)[1]
+    set_deployment(firestore_mock, "deployments", _ready_deployment_doc(runpod_key))
+    monkeypatch.delenv("INTERNAL_WEBHOOK_BASE_URL", raising=False)
+    monkeypatch.setenv("INTERNAL_WEBHOOK_SECRET", "internal-secret")
+    get_settings.cache_clear()
+
+    provider = Mock()
+    provider.submit_job = AsyncMock(return_value={"id": "rp_job_1", "status": "IN_QUEUE", "raw_response": {}})
+
+    with patch("src.api.routes.inference.get_provider", return_value=provider):
+        resp = client.post(
+            "/v1/inference/jobs",
+            json={
+                "deployment_id": "dep_2026_ready123",
+                "task": "text_to_image",
+                "input": {"prompt": "A futuristic skyline"},
+                "s3Config": {
+                    "accessId": "key-id",
+                    "accessSecret": "secret-key",
+                    "bucketName": "user-results",
+                    "endpointUrl": "https://storage.example.com",
+                },
+            },
+            headers=auth_headers,
+        )
+
+    assert resp.status_code == 202
+    assert provider.submit_job.await_args.kwargs["webhook_url"] == (
+        "http://testserver/internal/inference/jobs/"
+        f"{resp.json()['job_id']}/complete?secret=internal-secret"
+    )
+    get_settings.cache_clear()
 
 
 def test_get_inference_job_refreshes_provider_status(

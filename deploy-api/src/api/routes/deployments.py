@@ -26,6 +26,7 @@ from src.models.schemas import (
 from src.services.deployment import mark_deployment_ready_and_notify
 from src.services.endpoint_naming import model_slug, pool_endpoint_name, user_endpoint_name
 from src.services.firestore_repo import get_deployment, list_deployments, set_deployment
+from src.services.internal_urls import resolve_internal_base_url
 from src.services.log_tunnel import get_live_logs_since
 from src.services.model_capabilities import supports_task
 from src.services.pool_policy import choose_pool_policy
@@ -184,6 +185,7 @@ async def list_deployments_route(
 
 @router.post("", response_model=DeploymentResponse202, status_code=status.HTTP_202_ACCEPTED)
 async def create_deployment(
+    request: Request,
     body: DeploymentCreate,
     ctx: Annotated[RequestContext, Depends(get_request_context)],
     firestore_client=Depends(get_firestore),
@@ -211,6 +213,7 @@ async def create_deployment(
     created_at_dt = datetime.now(UTC)
     created_at = created_at_dt.isoformat().replace("+00:00", "Z")
     stream_url = _build_stream_url(deployment_id)
+    internal_webhook_base_url = resolve_internal_base_url(request)
 
     runpod_api_key = _resolve_runpod_key(body, ctx)
     if not runpod_api_key:
@@ -302,6 +305,7 @@ async def create_deployment(
             pool_policy=pool_policy.name,
             region=body.region,
             task=body.task,
+            internal_webhook_base_url=internal_webhook_base_url,
         )
         set_deployment(firestore_client, settings.firestore_collection_deployments, reused_doc)
         await mark_deployment_ready_and_notify(
@@ -336,6 +340,7 @@ async def create_deployment(
         pool_policy=pool_policy.name,
         region=body.region,
         task=body.task,
+        internal_webhook_base_url=internal_webhook_base_url,
     )
     set_deployment(firestore_client, settings.firestore_collection_deployments, doc)
 

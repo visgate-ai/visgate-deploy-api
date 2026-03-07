@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, Request, status
 
 from src.api.dependencies import RequestContext, get_firestore, get_request_context
 from src.core.config import get_settings
@@ -33,6 +33,7 @@ from src.services.inference_jobs import (
     resolve_gpu_hourly_price,
     sanitize_s3_config,
 )
+from src.services.internal_urls import build_inference_job_callback_url, resolve_internal_base_url
 from src.services.model_capabilities import supports_task
 from src.services.provider_factory import get_provider
 
@@ -98,12 +99,13 @@ def _job_to_response(doc: InferenceJobDoc) -> InferenceJobResponse:
     )
 
 
-def _build_internal_job_webhook(job_id: str) -> str | None:
+def _build_internal_job_webhook(job_id: str, request: Request | None = None) -> str | None:
     settings = get_settings()
-    if not settings.internal_webhook_base_url or not settings.internal_webhook_secret:
+    if not settings.internal_webhook_secret:
         return None
-    base = settings.internal_webhook_base_url.rstrip("/")
-    return f"{base}/internal/inference/jobs/{job_id}/complete?secret={settings.internal_webhook_secret}"
+    base = resolve_internal_base_url(request)
+    url = build_inference_job_callback_url(base, job_id, settings.internal_webhook_secret)
+    return url or None
 
 
 async def _refresh_job_status(job_doc: InferenceJobDoc, api_key: str, firestore_client: Any) -> InferenceJobDoc:
@@ -154,6 +156,7 @@ async def _refresh_job_status(job_doc: InferenceJobDoc, api_key: str, firestore_
 
 @router.post("", response_model=InferenceJobAcceptedResponse, status_code=status.HTTP_202_ACCEPTED)
 async def create_inference_job(
+    request: Request,
     body: InferenceJobCreate,
     ctx: Annotated[RequestContext, Depends(get_request_context)],
     firestore_client=Depends(get_firestore),
@@ -177,7 +180,7 @@ async def create_inference_job(
 
     provider = get_provider(deployment.provider or "runpod")
     job_id = generate_job_id()
-    internal_webhook_url = _build_internal_job_webhook(job_id)
+    internal_webhook_url = _build_internal_job_webhook(job_id, request)
     provider_webhook = internal_webhook_url or (str(body.user_webhook_url) if body.user_webhook_url else None)
     created_at = now_iso()
     gpu_price_per_hour_usd = None

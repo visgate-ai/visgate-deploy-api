@@ -21,6 +21,7 @@ from src.core.telemetry import (
 )
 from src.services.gpu_selection import select_gpu_candidates
 from src.services.huggingface import validate_model
+from src.services.internal_urls import build_deployment_ready_url, build_log_tunnel_url
 from src.services.provider_factory import get_provider
 from src.services.r2_manifest import (
     fetch_cached_model_ids,
@@ -280,19 +281,21 @@ async def orchestrate_deployment(
         # Worker needs its own RunPod key to self-cleanup when idle
         env["RUNPOD_API_KEY"] = user_runpod_key
 
-        internal_base = getattr(settings, "internal_webhook_base_url", "") or ""
+        internal_base = (doc.internal_webhook_base_url or getattr(settings, "internal_webhook_base_url", "") or "").rstrip("/")
         # Internal secret travels via header (X-Visgate-Internal-Secret), never in URL
         # to prevent it appearing in Cloud Run access logs.
-        visgate_webhook = f"{internal_base}/internal/deployment-ready/{deployment_id}"
-        env["VISGATE_WEBHOOK"] = visgate_webhook
+        visgate_webhook = build_deployment_ready_url(internal_base, deployment_id)
+        if visgate_webhook:
+            env["VISGATE_WEBHOOK"] = visgate_webhook
         if settings.internal_webhook_secret:
             env["VISGATE_INTERNAL_SECRET"] = settings.internal_webhook_secret
         if settings.cleanup_idle_timeout_seconds:
             env["CLEANUP_IDLE_TIMEOUT_SECONDS"] = str(settings.cleanup_idle_timeout_seconds)
         if settings.cleanup_failure_threshold:
             env["CLEANUP_FAILURE_THRESHOLD"] = str(settings.cleanup_failure_threshold)
-        if internal_base:
-            env["VISGATE_LOG_TUNNEL"] = f"{internal_base}/internal/logs/{deployment_id}"
+        log_tunnel_url = build_log_tunnel_url(internal_base, deployment_id)
+        if log_tunnel_url:
+            env["VISGATE_LOG_TUNNEL"] = log_tunnel_url
 
         # Common data for all providers
         endpoint_name = doc.endpoint_name or f"visgate-{deployment_id}"
