@@ -207,7 +207,10 @@ class RunpodProvider(BaseInferenceProvider):
         policy: dict[str, Any] | None = None,
         s3_config: dict[str, Any] | None = None,
     ) -> ProviderJobAccepted:
-        payload: dict[str, Any] = {"input": job_input}
+        payload_input = dict(job_input)
+        if s3_config and "s3Config" not in payload_input:
+            payload_input["s3Config"] = s3_config
+        payload: dict[str, Any] = {"input": payload_input}
         if webhook_url:
             payload["webhook"] = webhook_url
         if policy:
