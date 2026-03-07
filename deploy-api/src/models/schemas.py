@@ -155,6 +155,20 @@ class HFModelSearchResponse(BaseModel):
     query: str
 
 
+class ValidateKeyRequest(BaseModel):
+    """Request body for provider key validation."""
+
+    provider: str = Field(..., min_length=1, max_length=64)
+    api_key: str = Field(..., min_length=1, max_length=4096)
+
+
+class ValidateKeyResponse(BaseModel):
+    """Validation result for a provider API key."""
+
+    valid: bool
+    message: str
+
+
 class DeploymentCostResponse(BaseModel):
     """Estimate GPU deployment cost."""
     deployment_id: str

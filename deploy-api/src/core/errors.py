@@ -27,6 +27,7 @@ class HuggingFaceModelNotFoundError(OrchestratorError):
         super().__init__(
             message or f"Hugging Face model not found: {model_id}",
             status_code=404,
+            error_code="HF_MODEL_NOT_FOUND",
             details={"hf_model_id": model_id},
         )
 
@@ -38,6 +39,7 @@ class RunpodInsufficientGPUError(OrchestratorError):
         super().__init__(
             message or f"No Runpod GPU with sufficient VRAM (required >= {vram_gb} GB)",
             status_code=503,
+            error_code="RUNPOD_INSUFFICIENT_GPU",
             details={"required_vram_gb": vram_gb},
         )
 
@@ -51,7 +53,12 @@ class RunpodAPIError(OrchestratorError):
         status_code: int = 502,
         details: dict[str, Any] | None = None,
     ) -> None:
-        super().__init__(message=message, status_code=status_code, details=details or {})
+        super().__init__(
+            message=message,
+            status_code=status_code,
+            error_code="RUNPOD_API_ERROR",
+            details=details or {},
+        )
 
 
 class WebhookDeliveryError(OrchestratorError):
@@ -61,6 +68,7 @@ class WebhookDeliveryError(OrchestratorError):
         super().__init__(
             message or f"Webhook delivery failed after retries: {url}",
             status_code=502,
+            error_code="WEBHOOK_DELIVERY_FAILED",
             details={"webhook_url": url},
         )
 
@@ -72,6 +80,7 @@ class DeploymentNotFoundError(OrchestratorError):
         super().__init__(
             f"Deployment not found: {deployment_id}",
             status_code=404,
+            error_code="DEPLOYMENT_NOT_FOUND",
             details={"deployment_id": deployment_id},
         )
 
@@ -80,7 +89,7 @@ class UnauthorizedError(OrchestratorError):
     """Raised when API key is missing or invalid."""
 
     def __init__(self, message: str = "Invalid or missing API key") -> None:
-        super().__init__(message, status_code=401)
+        super().__init__(message, status_code=401, error_code="UNAUTHORIZED")
 
 
 class RateLimitError(OrchestratorError):
@@ -90,6 +99,7 @@ class RateLimitError(OrchestratorError):
         super().__init__(
             "Rate limit exceeded. Try again later.",
             status_code=429,
+            error_code="RATE_LIMIT_EXCEEDED",
             details={"retry_after_seconds": retry_after_seconds},
         )
 
@@ -98,4 +108,4 @@ class InvalidDeploymentRequestError(OrchestratorError):
     """Raised when deployment request has invalid combination of fields (e.g. must provide hf_model_id OR model_name)."""
 
     def __init__(self, message: str) -> None:
-        super().__init__(message, status_code=400)
+        super().__init__(message, status_code=400, error_code="INVALID_DEPLOYMENT_REQUEST")

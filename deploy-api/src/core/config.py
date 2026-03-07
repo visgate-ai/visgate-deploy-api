@@ -38,6 +38,11 @@ class Settings(BaseSettings):
         default=False,
         description="Use in-memory storage instead of Firestore. Auto-enabled when GCP_PROJECT_ID is empty.",
     )
+    root_path: str = Field(
+        default="",
+        validation_alias=AliasChoices("visgate_deploy_api_root_path", "root_path"),
+        description="Optional public URL prefix when the service is published behind a reverse proxy path.",
+    )
 
     # Firestore
     firestore_collection_deployments: str = Field(
@@ -101,7 +106,7 @@ class Settings(BaseSettings):
         ),
     )
     runpod_workers_max: int = Field(
-        default=3,
+        default=2,
         ge=1,
         le=20,
         description="Maximum concurrent workers per endpoint",

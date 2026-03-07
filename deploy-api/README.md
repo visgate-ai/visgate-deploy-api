@@ -69,11 +69,60 @@ Returns current status, Runpod endpoint URL, logs, and error (if failed).
 
 Tears down the Runpod endpoint and marks deployment deleted. Returns 204.
 
+### POST /v1/providers/validate
+
+Validates a provider API key without storing it. This is the contract used by visgate-api when users test BYOK credentials in the app console.
+
+Supported providers: `fal`, `replicate`, `runway`, `runpod`, `huggingface`.
+
+**Request:**
+```json
+{
+   "provider": "runpod",
+   "api_key": "rpa_..."
+}
+```
+
+**Response (200):**
+```json
+{
+   "valid": true,
+   "message": "RunPod API key is valid"
+}
+```
+
+Invalid or unsupported keys still return `200` with `valid=false`, so callers can render validation feedback without treating the response as a transport failure.
+
 ### Health
 
 - **GET /health** – Liveness (<10ms).
 - **GET /readiness** – Checks Firestore connection.
 - **GET /metrics** – JSON counters: deployments created, webhook failures, RunPod errors, p50/p95 durations.
+
+### Error codes
+
+Deploy API error responses follow this shape:
+
+```json
+{
+   "error": "INVALID_DEPLOYMENT_REQUEST",
+   "message": "shared cache requires R2_MODEL_BASE_URL configured on service",
+   "details": {}
+}
+```
+
+Stable error codes currently exposed by the service:
+
+| Error code | Meaning |
+|---|---|
+| `HF_MODEL_NOT_FOUND` | Hugging Face model does not exist or is inaccessible with the provided token |
+| `RUNPOD_INSUFFICIENT_GPU` | No suitable GPU capacity was available for the model VRAM requirement |
+| `RUNPOD_API_ERROR` | RunPod GraphQL or endpoint provisioning failed |
+| `WEBHOOK_DELIVERY_FAILED` | User webhook failed after retries |
+| `DEPLOYMENT_NOT_FOUND` | Deployment ID does not exist |
+| `UNAUTHORIZED` | Missing or invalid RunPod API key |
+| `RATE_LIMIT_EXCEEDED` | Request rate exceeded current limits |
+| `INVALID_DEPLOYMENT_REQUEST` | Invalid request combination or missing deployment prerequisites |
 
 ## Inference image (Runpod worker)
 
@@ -154,6 +203,13 @@ See [inference/README.md](../inference/README.md) for supported models, job I/O,
    # INTERNAL_WEBHOOK_BASE_URL=https://your-cloud-run-service.run.app
    # CLOUD_TASKS_SERVICE_ACCOUNT=your-sa@YOUR_PROJECT.iam.gserviceaccount.com
    ```
+
+5. **Optional public path via visgateai.com**
+   If you want the public entrypoint at `https://visgateai.com/deployapi`, publish a reverse-proxy rewrite and keep the service configured with:
+   ```bash
+   VISGATE_DEPLOY_API_ROOT_PATH=/deployapi
+   ```
+   This is good for public docs and open-source discoverability. For server-to-server calls from visgate-api, a direct Cloud Run URL or dedicated subdomain is still lower latency and operationally cleaner.
    The SA needs `roles/cloudtasks.enqueuer` + `roles/run.invoker` + `roles/secretmanager.admin`.
 
 ## Troubleshooting

@@ -88,3 +88,10 @@ def test_aws_endpoint_reads_from_visgate_env(monkeypatch: pytest.MonkeyPatch) ->
     monkeypatch.setenv("VISGATE_DEPLOY_API_S3_API_R2", "https://acct.r2.cloudflarestorage.com")
     s = Settings()
     assert s.r2_endpoint_url == "https://acct.r2.cloudflarestorage.com"
+
+
+def test_root_path_reads_from_visgate_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """root_path can be set for public path-prefix publishing."""
+    monkeypatch.setenv("VISGATE_DEPLOY_API_ROOT_PATH", "/deployapi")
+    s = Settings()
+    assert s.root_path == "/deployapi"

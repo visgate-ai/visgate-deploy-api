@@ -6,11 +6,13 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from src.api.middleware.strip_root_path import StripRootPathMiddleware
 from src.api.routes import (
     deployments_router,
     health_router,
     internal_router,
     models_router,
+    providers_router,
     tasks_router,
 )
 from src.core.config import get_settings
@@ -34,6 +36,7 @@ app = FastAPI(
     description="GCP Cloud Run deployment orchestrator for Hugging Face + Runpod",
     version="1.0.0",
     lifespan=lifespan,
+    root_path=get_settings().root_path,
 )
 app.add_middleware(
     CORSMiddleware,
@@ -41,9 +44,11 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.add_middleware(StripRootPathMiddleware, root_path=get_settings().root_path)
 
 app.include_router(health_router)
 app.include_router(models_router)
+app.include_router(providers_router)
 app.include_router(deployments_router)
 app.include_router(internal_router)
 app.include_router(tasks_router)
@@ -73,4 +78,6 @@ async def orchestrator_error_handler(request: Request, exc: OrchestratorError) -
 @app.get("/")
 async def root() -> dict:
     """Root redirect or info."""
-    return {"service": "visgate-deploy-api", "docs": "/docs"}
+    settings = get_settings()
+    docs_path = f"{settings.root_path.rstrip('/')}/docs" if settings.root_path else "/docs"
+    return {"service": "visgate-deploy-api", "docs": docs_path}

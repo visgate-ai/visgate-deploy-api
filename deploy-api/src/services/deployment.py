@@ -1,6 +1,7 @@
 """Deployment orchestration: validate HF -> select GPU -> create Runpod endpoint -> notify user."""
 
 import asyncio
+import re
 from datetime import UTC, datetime
 
 import httpx
@@ -146,6 +147,15 @@ async def orchestrate_deployment(
             "resource exhausted",
         ]
         return any(marker in m for marker in markers)
+
+    def parse_worker_quota_limit(message: str) -> int | None:
+        match = re.search(r"at most\s+(\d+)", message or "", flags=re.IGNORECASE)
+        if not match:
+            return None
+        try:
+            return max(1, int(match.group(1)))
+        except ValueError:
+            return None
 
     try:
         doc = get_deployment(client, coll, deployment_id)
@@ -299,23 +309,56 @@ async def orchestrate_deployment(
             target_ids=target_ids
         )
 
+        async def create_endpoint_for_gpu_ids(gpu_ids: list[str], workers_max: int):
+            try:
+                return await provider.create_endpoint(
+                    name=endpoint_name,
+                    gpu_ids=gpu_ids,
+                    image=settings.docker_image,
+                    env=env,
+                    api_key=user_runpod_key,
+                    template_id=settings.runpod_template_id,
+                    workers_min=min(settings.runpod_workers_min, workers_max),
+                    workers_max=workers_max,
+                    idle_timeout=settings.runpod_idle_timeout_seconds,
+                    scaler_type=settings.runpod_scaler_type,
+                    scaler_value=settings.runpod_scaler_value,
+                    volume_in_gb=settings.runpod_volume_size_gb,
+                    locations=locations,
+                )
+            except Exception as exc:
+                allowed_workers_max = parse_worker_quota_limit(str(exc))
+                if allowed_workers_max is None or allowed_workers_max >= workers_max:
+                    raise
+
+                log_step(
+                    "WARNING",
+                    "RunPod worker quota reduced autoscaling; retrying with a lower worker cap",
+                    requested_workers_max=workers_max,
+                    adjusted_workers_max=allowed_workers_max,
+                )
+                return await provider.create_endpoint(
+                    name=endpoint_name,
+                    gpu_ids=gpu_ids,
+                    image=settings.docker_image,
+                    env=env,
+                    api_key=user_runpod_key,
+                    template_id=settings.runpod_template_id,
+                    workers_min=min(settings.runpod_workers_min, allowed_workers_max),
+                    workers_max=allowed_workers_max,
+                    idle_timeout=settings.runpod_idle_timeout_seconds,
+                    scaler_type=settings.runpod_scaler_type,
+                    scaler_value=settings.runpod_scaler_value,
+                    volume_in_gb=settings.runpod_volume_size_gb,
+                    locations=locations,
+                )
+
         endpoint_data = None
         last_error = None
         try:
-            endpoint_data = await provider.create_endpoint(
-                name=endpoint_name,
-                gpu_ids=target_ids, # Pass a list of GPU IDs
-                image=settings.docker_image,
-                env=env,
-                api_key=user_runpod_key,
-                template_id=settings.runpod_template_id,
-                workers_min=settings.runpod_workers_min,
-                workers_max=settings.runpod_workers_max,
-                idle_timeout=settings.runpod_idle_timeout_seconds,
-                scaler_type=settings.runpod_scaler_type,
-                scaler_value=settings.runpod_scaler_value,
-                volume_in_gb=settings.runpod_volume_size_gb,
-                locations=locations,
+            endpoint_data = await create_endpoint_for_gpu_ids(
+                target_ids,
+                settings.runpod_workers_max,
             )
         except Exception as e:
             last_error = e
@@ -323,20 +366,9 @@ async def orchestrate_deployment(
                 log_step("WARNING", "Out of capacity for entire pool; falling back to global search")
                 # Fallback to all candidates if top 3 fail (more expensive/rare ones)
                 full_ids = [c[0] for c in gpu_candidates]
-                endpoint_data = await provider.create_endpoint(
-                    name=endpoint_name,
-                    gpu_ids=full_ids, # Pass a list of all GPU IDs
-                    image=settings.docker_image,
-                    env=env,
-                    api_key=user_runpod_key,
-                    template_id=settings.runpod_template_id,
-                    workers_min=settings.runpod_workers_min,
-                    workers_max=settings.runpod_workers_max,
-                    idle_timeout=settings.runpod_idle_timeout_seconds,
-                    scaler_type=settings.runpod_scaler_type,
-                    scaler_value=settings.runpod_scaler_value,
-                    volume_in_gb=settings.runpod_volume_size_gb,
-                    locations=locations,
+                endpoint_data = await create_endpoint_for_gpu_ids(
+                    full_ids,
+                    settings.runpod_workers_max,
                 )
             else:
                 raise e

@@ -195,7 +195,7 @@ DOCKER_IMAGE=your-org/inference:latest
 # Cost tuning
 RUNPOD_WORKERS_MIN=0                 # 0 = no idle cost, 1 = always warm
 RUNPOD_IDLE_TIMEOUT_SECONDS=120      # how long a worker stays up after last job
-RUNPOD_WORKERS_MAX=3
+RUNPOD_WORKERS_MAX=2                 # start at 2; quota errors are retried with lower caps
 
 # Durable task execution (recommended for production)
 # Without this, orchestration runs in-process and is killed on Cloud Run scale-to-zero
