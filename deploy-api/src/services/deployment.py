@@ -198,14 +198,14 @@ async def orchestrate_deployment(
         # On cache miss: separate Cloud Task will download from HF and upload to R2.
         computed_s3_model_url: Optional[str] = None
         trigger_cache_model_task: bool = False
-        if settings.aws_access_key_id and settings.aws_endpoint_url and not s3_model_url:
-            per_model_url = model_s3_url(settings.s3_model_url, hf_model_id)
+        if settings.r2_access_key_id_rw and settings.r2_endpoint_url and not s3_model_url:
+            per_model_url = model_s3_url(settings.r2_model_base_url, hf_model_id)
             update_deployment(client, coll, deployment_id, {"status": "checking_r2_cache"})
             log_step("INFO", "Checking R2 model cache", hf_model_id=hf_model_id)
             cached_ids = fetch_cached_model_ids(
-                settings.aws_endpoint_url,
-                settings.aws_access_key_id,
-                settings.aws_secret_access_key,
+                settings.r2_endpoint_url,
+                settings.r2_access_key_id_rw,
+                settings.r2_secret_access_key_rw,
             )
             if hf_model_id in cached_ids:
                 computed_s3_model_url = per_model_url
@@ -239,24 +239,24 @@ async def orchestrate_deployment(
         if hf_token:
             env["HF_TOKEN"] = hf_token
         
-        # AWS/S3 credentials injected into RunPod worker:
-        #   - cache_scope=private  → user's own keys (passed via aws_access_key_id param)
-        #   - cache_scope=shared   → platform R2 READ-ONLY key (RW key stays in API only)
-        #   - cache_scope=off      → no keys
-        # The RW platform key (settings.aws_access_key_id) is intentionally NEVER sent to workers.
+        # Credentials injected into RunPod worker env:
+        #   cache_scope=private  → user's own S3-compat keys (user's bucket)
+        #   cache_scope=shared   → platform Cloudflare R2 READ-ONLY key (RW key stays in API)
+        #   cache_scope=off      → no keys injected
+        # The RW platform key (settings.r2_access_key_id_rw) is intentionally NEVER sent to workers.
         if aws_access_key_id:
-            # User's private credentials
+            # User's private S3-compat credentials (cache_scope=private)
             effective_access_key = aws_access_key_id
             effective_secret_key = aws_secret_access_key or ""
-        elif settings.r2_access_key_id_r:
-            # Platform shared cache — read-only key only
-            effective_access_key = settings.r2_access_key_id_r
-            effective_secret_key = settings.r2_secret_access_key_r
+        elif settings.r2_access_key_id_ro:
+            # Platform shared R2 cache — read-only key only (cache_scope=shared)
+            effective_access_key = settings.r2_access_key_id_ro
+            effective_secret_key = settings.r2_secret_access_key_ro
         else:
             effective_access_key = ""
             effective_secret_key = ""
 
-        effective_endpoint = aws_endpoint_url or settings.aws_endpoint_url
+        effective_endpoint = aws_endpoint_url or settings.r2_endpoint_url
         # Use user-provided URL, or the per-model R2 URL computed from the cache check,
         # or fall back to empty string (worker downloads from HuggingFace directly).
         effective_s3_model_url = s3_model_url or computed_s3_model_url or ""

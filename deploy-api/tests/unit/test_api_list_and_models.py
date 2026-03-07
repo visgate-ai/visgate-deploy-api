@@ -122,9 +122,9 @@ def test_list_models_no_r2(client: TestClient) -> None:
 
 def test_list_models_with_r2_cache(client: TestClient, monkeypatch) -> None:
     """GET /v1/models marks cached=True for models in R2 manifest."""
-    monkeypatch.setenv("R2_ACCESS_KEY_ID_R", "rtest")
-    monkeypatch.setenv("R2_SECRET_ACCESS_KEY_R", "rsecret")
-    monkeypatch.setenv("AWS_ENDPOINT_URL", "https://r2.example.com")
+    monkeypatch.setenv("VISGATE_DEPLOYAPI_R2_ACCESS_KEY_ID_RO", "rtest")
+    monkeypatch.setenv("VISGATE_DEPLOYAPI_R2_SECRET_ACCESS_KEY_RO", "rsecret")
+    monkeypatch.setenv("VISGATE_DEPLOYAPI_R2_ENDPOINT_URL", "https://r2.example.com")
 
     cached_id = "black-forest-labs/FLUX.1-schnell"
 
@@ -168,9 +168,9 @@ def test_list_models_cached_entries_sorted_first(client: TestClient) -> None:
         from src.core.config import get_settings
         import src.core.config as cfg_mod
         fake_settings = MagicMock()
-        fake_settings.aws_endpoint_url = "https://r2.example.com"
-        fake_settings.r2_access_key_id_r = "rtest"
-        fake_settings.r2_secret_access_key_r = "rsecret"
+        fake_settings.r2_endpoint_url = "https://r2.example.com"
+        fake_settings.r2_access_key_id_ro = "rtest"
+        fake_settings.r2_secret_access_key_ro = "rsecret"
         with patch.object(cfg_mod, "get_settings", return_value=fake_settings):
             resp = client.get("/v1/models")
 

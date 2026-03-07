@@ -133,7 +133,17 @@ See [inference/README.md](../inference/README.md) for supported models, job I/O,
 3. **Set secrets** in Secret Manager and env:
    - `VISGATE_DEPLOY_API_RUNPOD_TEMPLATE_ID` – RunPod serverless template that uses our inference image (create via `scripts/create_runpod_template.py`).
    - `VISGATE_DEPLOY_API_INTERNAL_WEBHOOK_SECRET` – Optional secret for `/internal/deployment-ready` callback.
-   - Tip: use `sm://SECRET_NAME` to auto-resolve from GCP Secret Manager.
+
+   **Cloudflare R2 credentials** (for platform shared model cache):
+   | GCP Secret name | Cloud Run env var | Purpose |
+   |---|---|---|
+   | `VISGATE_DEPLOY_API_R2_ACCESS_KEY_ID_RW` | `VISGATE_DEPLOYAPI_R2_ACCESS_KEY_ID_RW` | R2 read-write key — API only, never sent to workers |
+   | `VISGATE_DEPLOY_API_R2_SECRET_ACCESS_KEY_RW` | `VISGATE_DEPLOYAPI_R2_SECRET_ACCESS_KEY_RW` | R2 RW secret — API only |
+   | `VISGATE_DEPLOY_API_S3_API_R2` | `VISGATE_DEPLOYAPI_R2_ENDPOINT_URL` | R2 endpoint URL |
+   | `VISGATE_DEPLOY_API_R2_ACCESS_KEY_ID_R` | `VISGATE_DEPLOYAPI_R2_ACCESS_KEY_ID_RO` | R2 read-only key — injected into RunPod workers |
+   | `VISGATE_DEPLOY_API_R2_SECRET_ACCESS_KEY_R` | `VISGATE_DEPLOYAPI_R2_SECRET_ACCESS_KEY_RO` | R2 RO secret — injected into RunPod workers |
+
+   > **Note:** GCP Secret Manager names cannot be renamed. The Cloud Run env var names (left column) have been updated to be descriptive. The `AliasChoices` in `config.py` ensures old names still work for backward compatibility.
 
 4. **Create Cloud Tasks queue** (recommended for production — eliminates F6 scale-to-zero risk):
    ```bash

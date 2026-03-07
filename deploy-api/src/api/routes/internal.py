@@ -73,9 +73,9 @@ def _cache_model_once(hf_model_id: str, hf_token: str | None) -> dict[str, objec
     settings = get_settings()
 
     cached_ids = fetch_cached_model_ids(
-        endpoint_url=settings.aws_endpoint_url,
-        access_key_id=settings.aws_access_key_id,
-        secret_access_key=settings.aws_secret_access_key,
+        endpoint_url=settings.r2_endpoint_url,
+        access_key_id=settings.r2_access_key_id_rw,
+        secret_access_key=settings.r2_secret_access_key_rw,
         force_refresh=True,
     )
     if hf_model_id in cached_ids:
@@ -85,9 +85,9 @@ def _cache_model_once(hf_model_id: str, hf_token: str | None) -> dict[str, objec
     s3_prefix = f"models/{model_slug}"
     s3 = boto3.client(
         "s3",
-        endpoint_url=settings.aws_endpoint_url,
-        aws_access_key_id=settings.aws_access_key_id,
-        aws_secret_access_key=settings.aws_secret_access_key,
+        endpoint_url=settings.r2_endpoint_url,
+        aws_access_key_id=settings.r2_access_key_id_rw,
+        aws_secret_access_key=settings.r2_secret_access_key_rw,
         region_name="auto",
     )
 
@@ -123,9 +123,9 @@ def _cache_model_once(hf_model_id: str, hf_token: str | None) -> dict[str, objec
 
     manifest_updated = add_model_to_manifest(
         model_id=hf_model_id,
-        endpoint_url=settings.aws_endpoint_url,
-        access_key_id=settings.aws_access_key_id,
-        secret_access_key=settings.aws_secret_access_key,
+        endpoint_url=settings.r2_endpoint_url,
+        access_key_id=settings.r2_access_key_id_rw,
+        secret_access_key=settings.r2_secret_access_key_rw,
     )
     if not manifest_updated:
         raise RuntimeError("manifest update failed after model upload")
@@ -216,7 +216,7 @@ async def task_cache_model(
     if settings.internal_webhook_secret and x_visgate_secret != settings.internal_webhook_secret:
         raise HTTPException(status_code=403, detail="Invalid internal secret")
 
-    if not settings.aws_access_key_id or not settings.aws_endpoint_url:
+    if not settings.r2_access_key_id_rw or not settings.r2_endpoint_url:
         return {"status": "skipped", "reason": "R2 not configured"}
 
     hf_model_id = payload.hf_model_id
@@ -224,7 +224,7 @@ async def task_cache_model(
     task_name = x_cloudtasks_taskname or "manual"
     retry_count = int(x_cloudtasks_taskretrycount or "0")
     started_at = time.perf_counter()
-    r2_path = model_s3_url(settings.s3_model_url, hf_model_id)
+    r2_path = model_s3_url(settings.r2_model_base_url, hf_model_id)
 
     _task_log(
         "INFO",
@@ -413,16 +413,16 @@ async def model_cached(
     if settings.internal_webhook_secret and provided_secret != settings.internal_webhook_secret:
         raise HTTPException(status_code=403, detail="Invalid internal secret")
 
-    if not settings.aws_access_key_id or not settings.aws_endpoint_url:
+    if not settings.r2_access_key_id_rw or not settings.r2_endpoint_url:
         return {"status": "skipped", "reason": "R2 not configured"}
 
     try:
         # Update manifest
         ok = add_model_to_manifest(
             model_id=payload.hf_model_id,
-            endpoint_url=settings.aws_endpoint_url,
-            access_key_id=settings.aws_access_key_id,
-            secret_access_key=settings.aws_secret_access_key,
+            endpoint_url=settings.r2_endpoint_url,
+            access_key_id=settings.r2_access_key_id_rw,
+            secret_access_key=settings.r2_secret_access_key_rw,
         )
 
         # Update deployment doc

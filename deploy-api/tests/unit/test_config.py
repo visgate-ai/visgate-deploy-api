@@ -34,12 +34,12 @@ def test_get_settings_cached() -> None:
 # ── New VISGATE_DEPLOY_API_ env var aliases ─────────────────────────────────
 
 def test_r2_rw_key_reads_from_visgate_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    """aws_access_key_id and aws_secret_access_key read via VISGATE_DEPLOY_API_ prefix."""
+    """r2_access_key_id_rw and r2_secret_access_key_rw read via VISGATE_DEPLOY_API_ prefix."""
     monkeypatch.setenv("VISGATE_DEPLOY_API_R2_ACCESS_KEY_ID_RW", "rw_key_id")
     monkeypatch.setenv("VISGATE_DEPLOY_API_R2_SECRET_ACCESS_KEY_RW", "rw_secret")
     s = Settings()
-    assert s.aws_access_key_id == "rw_key_id"
-    assert s.aws_secret_access_key == "rw_secret"
+    assert s.r2_access_key_id_rw == "rw_key_id"
+    assert s.r2_secret_access_key_rw == "rw_secret"
 
 
 def test_r2_rw_key_falls_back_to_old_env(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -49,17 +49,17 @@ def test_r2_rw_key_falls_back_to_old_env(monkeypatch: pytest.MonkeyPatch) -> Non
     monkeypatch.setenv("AWS_ACCESS_KEY_ID", "old_key_id")
     monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "old_secret")
     s = Settings(_env_file=None)  # skip .env file to avoid stale values
-    assert s.aws_access_key_id == "old_key_id"
-    assert s.aws_secret_access_key == "old_secret"
+    assert s.r2_access_key_id_rw == "old_key_id"
+    assert s.r2_secret_access_key_rw == "old_secret"
 
 
 def test_r2_ro_key_reads_from_visgate_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    """r2_access_key_id_r / r2_secret_access_key_r read via VISGATE_DEPLOY_API_ prefix."""
+    """r2_access_key_id_ro / r2_secret_access_key_ro read via VISGATE_DEPLOY_API_ prefix."""
     monkeypatch.setenv("VISGATE_DEPLOY_API_R2_ACCESS_KEY_ID_R", "ro_key_id")
     monkeypatch.setenv("VISGATE_DEPLOY_API_R2_SECRET_ACCESS_KEY_R", "ro_secret")
     s = Settings()
-    assert s.r2_access_key_id_r == "ro_key_id"
-    assert s.r2_secret_access_key_r == "ro_secret"
+    assert s.r2_access_key_id_ro == "ro_key_id"
+    assert s.r2_secret_access_key_ro == "ro_secret"
 
 
 def test_hf_pro_token_reads_from_visgate_env(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -70,23 +70,22 @@ def test_hf_pro_token_reads_from_visgate_env(monkeypatch: pytest.MonkeyPatch) ->
 
 
 def test_s3_model_url_default(monkeypatch: pytest.MonkeyPatch) -> None:
-    """s3_model_url defaults to s3://visgate-models/models."""
-    # Ensure neither alias is set
+    """r2_model_base_url defaults to s3://visgate-models/models."""
     monkeypatch.delenv("VISGATE_DEPLOY_API_S3_MODEL_URL_R2", raising=False)
     monkeypatch.delenv("S3_MODEL_URL", raising=False)
     s = Settings()
-    assert s.s3_model_url == "s3://visgate-models/models"
+    assert s.r2_model_base_url == "s3://visgate-models/models"
 
 
 def test_s3_model_url_overridable(monkeypatch: pytest.MonkeyPatch) -> None:
-    """s3_model_url can be overridden via VISGATE_DEPLOY_API_S3_MODEL_URL_R2."""
+    """r2_model_base_url can be overridden via VISGATE_DEPLOY_API_S3_MODEL_URL_R2."""
     monkeypatch.setenv("VISGATE_DEPLOY_API_S3_MODEL_URL_R2", "s3://my-bucket/models")
     s = Settings()
-    assert s.s3_model_url == "s3://my-bucket/models"
+    assert s.r2_model_base_url == "s3://my-bucket/models"
 
 
 def test_aws_endpoint_reads_from_visgate_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    """aws_endpoint_url reads via VISGATE_DEPLOY_API_S3_API_R2."""
+    """r2_endpoint_url reads via VISGATE_DEPLOY_API_S3_API_R2."""
     monkeypatch.setenv("VISGATE_DEPLOY_API_S3_API_R2", "https://acct.r2.cloudflarestorage.com")
     s = Settings()
-    assert s.aws_endpoint_url == "https://acct.r2.cloudflarestorage.com"
+    assert s.r2_endpoint_url == "https://acct.r2.cloudflarestorage.com"

@@ -200,10 +200,10 @@ async def enqueue_cache_model_task(
     settings = get_settings()
     queue_path = settings.cloud_tasks_queue_path
 
-    if not queue_path or not settings.aws_access_key_id:
+    if not queue_path or not settings.r2_access_key_id_rw:
         structured_log(
             "WARNING",
-            "Cache modeling skipped: no Cloud Tasks queue or R2 credentials configured",
+            "Cache modeling skipped: no Cloud Tasks queue or R2 RW credentials configured",
             hf_model_id=hf_model_id,
         )
         return

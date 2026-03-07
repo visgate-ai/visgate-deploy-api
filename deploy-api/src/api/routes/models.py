@@ -29,17 +29,17 @@ async def list_models() -> ModelsListResponse:
     # Attempt to read R2 manifest — graceful degradation if R2 not configured
     cached_ids: set[str] = set()
     if (
-        settings.aws_endpoint_url
-        and settings.r2_access_key_id_r
-        and settings.r2_secret_access_key_r
+        settings.r2_endpoint_url
+        and settings.r2_access_key_id_ro
+        and settings.r2_secret_access_key_ro
     ):
         cached_ids = fetch_cached_model_ids(
-            endpoint_url=settings.aws_endpoint_url,
-            access_key_id=settings.r2_access_key_id_r,
-            secret_access_key=settings.r2_secret_access_key_r,
+            endpoint_url=settings.r2_endpoint_url,
+            access_key_id=settings.r2_access_key_id_ro,
+            secret_access_key=settings.r2_secret_access_key_ro,
         )
     else:
-        logger.debug("R2 RO credentials not configured; skipping manifest fetch")
+        logger.debug("R2 read-only credentials not configured; skipping manifest fetch")
 
     entries = [
         ModelEntry(
@@ -57,5 +57,5 @@ async def list_models() -> ModelsListResponse:
     return ModelsListResponse(
         models=entries,
         total=len(entries),
-        cache_enabled=bool(cached_ids or settings.r2_access_key_id_r),
+        cache_enabled=bool(cached_ids or settings.r2_access_key_id_ro),
     )

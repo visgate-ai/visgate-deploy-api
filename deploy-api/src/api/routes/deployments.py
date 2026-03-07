@@ -213,8 +213,8 @@ async def create_deployment(
     if cache_scope == "shared":
         if not settings.shared_cache_enabled:
             raise InvalidDeploymentRequestError("shared cache is disabled on this service")
-        if not settings.s3_model_url:
-            raise InvalidDeploymentRequestError("shared cache requires S3_MODEL_URL configured on service")
+        if not settings.r2_model_base_url:
+            raise InvalidDeploymentRequestError("shared cache requires R2_MODEL_BASE_URL configured on service")
         allowlisted_models = _parse_csv_set(settings.shared_cache_allowed_models)
         if settings.shared_cache_reject_unlisted and allowlisted_models and hf_model_id not in allowlisted_models:
             raise InvalidDeploymentRequestError(

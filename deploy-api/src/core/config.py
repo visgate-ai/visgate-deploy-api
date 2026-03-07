@@ -155,38 +155,69 @@ class Settings(BaseSettings):
         description="Platform HF Pro token — auto-injected for gated models when caller omits hf_token",
     )
 
-    # R2 — read-write key (API-side only: future write-back, NEVER sent to workers)
-    aws_access_key_id: str = Field(
+    # ── Cloudflare R2 — Read/Write key ────────────────────────────────────────
+    # Used by the Deploy API only (manifest writes, HF→R2 cache uploads).
+    # NEVER injected into RunPod workers — workers only get the read-only key.
+    r2_access_key_id_rw: str = Field(
         default="",
-        validation_alias=AliasChoices("visgate_deploy_api_r2_access_key_id_rw", "aws_access_key_id"),
-        description="R2 RW Access Key ID — API use only (manifest writes, write-back). Not injected into RunPod workers.",
+        validation_alias=AliasChoices(
+            "visgate_deployapi_r2_access_key_id_rw",   # new canonical name
+            "visgate_deploy_api_r2_access_key_id_rw",  # GCP secret name (legacy)
+            "aws_access_key_id",                        # backward compat
+        ),
+        description="Cloudflare R2 RW Access Key ID — Deploy API only. Never sent to RunPod workers.",
     )
-    aws_secret_access_key: str = Field(
+    r2_secret_access_key_rw: str = Field(
         default="",
-        validation_alias=AliasChoices("visgate_deploy_api_r2_secret_access_key_rw", "aws_secret_access_key"),
-        description="R2 RW Secret Access Key — API use only.",
+        validation_alias=AliasChoices(
+            "visgate_deployapi_r2_secret_access_key_rw",
+            "visgate_deploy_api_r2_secret_access_key_rw",
+            "aws_secret_access_key",
+        ),
+        description="Cloudflare R2 RW Secret Access Key — Deploy API only.",
     )
-    aws_endpoint_url: str = Field(
+    r2_endpoint_url: str = Field(
         default="",
-        validation_alias=AliasChoices("visgate_deploy_api_s3_api_r2", "aws_endpoint_url"),
-        description="R2 endpoint URL — e.g. https://ACCOUNT.r2.cloudflarestorage.com",
+        validation_alias=AliasChoices(
+            "visgate_deployapi_r2_endpoint_url",
+            "visgate_deploy_api_r2_endpoint_url",
+            "visgate_deploy_api_s3_api_r2",  # GCP secret name (legacy)
+            "aws_endpoint_url",
+        ),
+        description="Cloudflare R2 endpoint URL — e.g. https://ACCOUNT.r2.cloudflarestorage.com",
     )
-    s3_model_url: str = Field(
+    r2_model_base_url: str = Field(
         default="s3://visgate-models/models",
-        validation_alias=AliasChoices("visgate_deploy_api_s3_model_url_r2", "s3_model_url"),
-        description="Base S3 URL for the platform model cache (e.g. s3://visgate-models/models)",
+        validation_alias=AliasChoices(
+            "visgate_deployapi_r2_model_base_url",
+            "visgate_deploy_api_s3_model_url_r2",
+            "s3_model_url",
+        ),
+        description="Base S3 path for the platform R2 model cache (e.g. s3://visgate-models/models)",
     )
 
-    # R2 — read-only key (injected into RunPod workers for shared cache downloads)
-    r2_access_key_id_r: str = Field(
+    # ── Cloudflare R2 — Read-only key ─────────────────────────────────────────
+    # Injected into RunPod workers so they can sync models from R2.
+    # Workers can only read — they cannot write or delete objects.
+    r2_access_key_id_ro: str = Field(
         default="",
-        validation_alias=AliasChoices("visgate_deploy_api_r2_access_key_id_r", "r2_access_key_id_r"),
-        description="R2 read-only Access Key ID — injected into RunPod workers for shared cache reads.",
+        validation_alias=AliasChoices(
+            "visgate_deployapi_r2_access_key_id_ro",
+            "visgate_deploy_api_r2_access_key_id_ro",
+            "visgate_deploy_api_r2_access_key_id_r",  # GCP secret name (legacy)
+            "r2_access_key_id_r",
+        ),
+        description="Cloudflare R2 read-only Access Key ID — injected into RunPod workers for shared cache reads.",
     )
-    r2_secret_access_key_r: str = Field(
+    r2_secret_access_key_ro: str = Field(
         default="",
-        validation_alias=AliasChoices("visgate_deploy_api_r2_secret_access_key_r", "r2_secret_access_key_r"),
-        description="R2 read-only Secret Access Key — injected into RunPod workers.",
+        validation_alias=AliasChoices(
+            "visgate_deployapi_r2_secret_access_key_ro",
+            "visgate_deploy_api_r2_secret_access_key_ro",
+            "visgate_deploy_api_r2_secret_access_key_r",
+            "r2_secret_access_key_r",
+        ),
+        description="Cloudflare R2 read-only Secret Access Key — injected into RunPod workers.",
     )
 
     shared_cache_enabled: bool = Field(
@@ -299,10 +330,10 @@ class Settings(BaseSettings):
         self.runpod_template_id = _resolve(self.runpod_template_id)
         self.internal_webhook_secret = _resolve(self.internal_webhook_secret)
         self.hf_pro_access_token = _resolve(self.hf_pro_access_token)
-        self.aws_access_key_id = _resolve(self.aws_access_key_id)
-        self.aws_secret_access_key = _resolve(self.aws_secret_access_key)
-        self.r2_access_key_id_r = _resolve(self.r2_access_key_id_r)
-        self.r2_secret_access_key_r = _resolve(self.r2_secret_access_key_r)
+        self.r2_access_key_id_rw = _resolve(self.r2_access_key_id_rw)
+        self.r2_secret_access_key_rw = _resolve(self.r2_secret_access_key_rw)
+        self.r2_access_key_id_ro = _resolve(self.r2_access_key_id_ro)
+        self.r2_secret_access_key_ro = _resolve(self.r2_secret_access_key_ro)
 
 
 @lru_cache
