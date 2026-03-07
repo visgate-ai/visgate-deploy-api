@@ -172,6 +172,15 @@ See [inference/README.md](../inference/README.md) for supported models, job I/O,
 - **POST /v1/deployments**: <200ms (async processing).
 - **GET /v1/deployments/{id}**: <50ms p99 with Firestore.
 
+### R2 Shared Cache
+
+| Path | Typical end-to-end | Notes |
+|---|---|---|
+| Cold (no cache) | ~120–180s | HF download → R2 upload → RunPod start |
+| Warm (R2 cache hit) | ~25–35s | R2 → RunPod start only (streaming, skip HF) |
+
+R2 upload uses multipart at 64 MB chunks (`TransferConfig`) with `Content-Length` set from HF response headers for reliable large-model transfers (e.g. FLUX 12 GB).
+
 ## Model specs (registry)
 
 Preconfigured models with hand-tuned VRAM values (no byte-estimation needed):
@@ -182,10 +191,12 @@ See [`src/models/model_specs_registry.py`](src/models/model_specs_registry.py). 
 
 ## Examples
 
-Tested on production — 2026-03-04, `stabilityai/sdxl-turbo`, 129s end-to-end.
+Tested on production — 2026-03-05, `black-forest-labs/FLUX.1-schnell`, 31s end-to-end (R2 cache hit).
+
+Previous cold run: 2026-03-04, `stabilityai/sdxl-turbo`, 129s (no cache).
 
 ```bash
-BASE="https://visgate-deploy-api-wxup7pxrsa-uc.a.run.app"
+BASE="https://visgate-deploy-api-wxup7pxrsa-ey.a.run.app"
 RP_KEY="rpa_..."
 ```
 
@@ -223,9 +234,10 @@ curl -s -X DELETE $BASE/v1/deployments/dep_2026_400ea2c4 \
 # → 204
 ```
 
-| Stage | Time |
-|---|---|
-| Deploy accepted | <1s |
-| Container ready | ~121s |
-| Inference (4 steps) | 3s |
-| **Total** | **129s** |
+| Stage | Time (cache hit) | Time (cold) |
+|---|---|---|
+| Deploy accepted | <1s | <1s |
+| R2 model sync to worker | ~10s | N/A |
+| Container ready | ~25s | ~121s |
+| Inference (4 steps) | 3s | 3s |
+| **Total** | **~31s** | **~129s** |

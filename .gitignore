@@ -33,6 +33,9 @@ htmlcov/
 e2e_timing_summary.json
 *.png
 istanbul_*.png
+# Stray pip install output (e.g. running `pip install =X.Y.Z` instead of ==)
+=*
+
 # OS
 .DS_Store
 Thumbs.db
