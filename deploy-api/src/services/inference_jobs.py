@@ -134,19 +134,31 @@ def _extract_key(value: Any) -> str | None:
 def extract_artifact_metadata(output: Any, destination: dict[str, Any] | None) -> dict[str, Any] | None:
     if output is None and not destination:
         return None
+    nested_artifact = output.get("artifact") if isinstance(output, dict) and isinstance(output.get("artifact"), dict) else None
     artifact: dict[str, Any] = {
-        "bucket_name": destination.get("bucket_name") if destination else None,
-        "endpoint_url": destination.get("endpoint_url") if destination else None,
+        "bucket_name": (nested_artifact or {}).get("bucket_name") or (destination.get("bucket_name") if destination else None),
+        "endpoint_url": (nested_artifact or {}).get("endpoint_url") or (destination.get("endpoint_url") if destination else None),
         "key": None,
         "url": None,
         "content_type": None,
         "bytes": None,
     }
     if isinstance(output, dict):
-        artifact["content_type"] = output.get("content_type") or output.get("mime_type")
-        artifact["bytes"] = output.get("bytes") or output.get("size") or output.get("size_bytes")
-    artifact["url"] = _find_first_url(output)
-    artifact["key"] = _extract_key(output)
+        artifact["content_type"] = (
+            (nested_artifact or {}).get("content_type")
+            or output.get("content_type")
+            or output.get("mime_type")
+        )
+        artifact["bytes"] = (
+            (nested_artifact or {}).get("bytes")
+            or output.get("bytes")
+            or output.get("size")
+            or output.get("size_bytes")
+        )
+        artifact["url"] = (nested_artifact or {}).get("url")
+        artifact["key"] = (nested_artifact or {}).get("key")
+    artifact["url"] = artifact["url"] or _find_first_url(output)
+    artifact["key"] = artifact["key"] or _extract_key(output)
     if artifact["url"] and not artifact["key"]:
         parsed = urlparse(artifact["url"])
         artifact["key"] = parsed.path.lstrip("/") or None

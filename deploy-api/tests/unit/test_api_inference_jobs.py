@@ -127,7 +127,17 @@ def test_get_inference_job_refreshes_provider_status(
         return_value={
             "id": "rp_job_2",
             "status": "COMPLETED",
-            "output": {"image": "https://cdn.example.com/output.png"},
+            "output": {
+                "image": "https://cdn.example.com/output.png",
+                "artifact": {
+                    "bucket_name": "user-results",
+                    "endpoint_url": "https://storage.example.com",
+                    "key": "jobs/output.png",
+                    "url": "https://storage.example.com/user-results/jobs/output.png",
+                    "content_type": "image/png",
+                    "bytes": 1234,
+                },
+            },
             "error": None,
             "raw_response": {},
         }
@@ -156,8 +166,10 @@ def test_get_inference_job_refreshes_provider_status(
     data = get_resp.json()
     assert data["status"] == "completed"
     assert data["provider_status"] == "COMPLETED"
-    assert data["output"] == {"image": "https://cdn.example.com/output.png"}
-    assert data["artifact"]["url"] == "https://cdn.example.com/output.png"
+    assert data["output"]["image"] == "https://cdn.example.com/output.png"
+    assert data["artifact"]["url"] == "https://storage.example.com/user-results/jobs/output.png"
+    assert data["artifact"]["content_type"] == "image/png"
+    assert data["artifact"]["bytes"] == 1234
     assert data["metrics"]["queue_ms"] is None
     provider.get_job_status.assert_awaited_once()
 
