@@ -7,6 +7,7 @@ DOCKER_IMAGE/IMAGE set (or in ../.env.local). Prints RUNPOD_TEMPLATE_ID for .env
 import asyncio
 import os
 import sys
+import argparse
 
 # Load .env.local from repo root if present
 _root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
@@ -29,13 +30,22 @@ TEMPLATE_NAME = "visgate-inference"
 DEFAULT_IMAGE = os.environ.get("DOCKER_IMAGE") or os.environ.get("IMAGE") or "visgateai/inference:latest"
 
 
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--name", default=TEMPLATE_NAME)
+    parser.add_argument("--image", default=DEFAULT_IMAGE)
+    parser.add_argument("--template-id", default="")
+    return parser.parse_args()
+
+
 async def main() -> None:
+    args = parse_args()
     api_key = os.environ.get("RUNPOD", "").strip()
     if not api_key:
         print("Set RUNPOD to your Runpod API key (e.g. in .env.local).", file=sys.stderr)
         sys.exit(1)
 
-    image = DEFAULT_IMAGE
+    image = args.image
     if ":" not in image:
         image = f"{image}:latest"
     print(f"Using image: {image}", file=sys.stderr)
@@ -43,9 +53,10 @@ async def main() -> None:
     try:
         result = await create_serverless_template(
             api_key=api_key,
-            name=TEMPLATE_NAME,
+            name=args.name,
             image_name=image,
             container_disk_in_gb=25,
+            template_id=args.template_id or None,
         )
     except Exception as e:
         if "unique" in str(e).lower() or "already" in str(e).lower() or "duplicate" in str(e).lower():

@@ -29,6 +29,7 @@ from src.services.r2_manifest import (
 )
 from src.services.secret_cache import get_secrets
 from src.services.webhook import notify
+from src.services.worker_routing import resolve_worker_target
 
 
 def _get_repo():
@@ -300,6 +301,7 @@ async def orchestrate_deployment(
         # Common data for all providers
         endpoint_name = doc.endpoint_name or f"visgate-{deployment_id}"
         locations = (doc.region or settings.runpod_default_locations).strip()
+        worker_target = resolve_worker_target(settings, hf_model_id, doc.task)
 
         # MULTI-GPU TARGETING: Select top 3 candidates to increase availability
         target_candidates = gpu_candidates[:3]
@@ -309,7 +311,10 @@ async def orchestrate_deployment(
         log_step(
             "INFO",
             f"Deploying to GPU pool: {target_display}",
-            target_ids=target_ids
+            target_ids=target_ids,
+            worker_profile=worker_target["profile"],
+            template_id=worker_target["template_id"],
+            image=worker_target["image"],
         )
 
         async def create_endpoint_for_gpu_ids(gpu_ids: list[str], workers_max: int):
@@ -317,10 +322,10 @@ async def orchestrate_deployment(
                 return await provider.create_endpoint(
                     name=endpoint_name,
                     gpu_ids=gpu_ids,
-                    image=settings.docker_image,
+                    image=worker_target["image"],
                     env=env,
                     api_key=user_runpod_key,
-                    template_id=settings.runpod_template_id,
+                    template_id=worker_target["template_id"],
                     workers_min=min(settings.runpod_workers_min, workers_max),
                     workers_max=workers_max,
                     idle_timeout=settings.runpod_idle_timeout_seconds,
@@ -343,10 +348,10 @@ async def orchestrate_deployment(
                 return await provider.create_endpoint(
                     name=endpoint_name,
                     gpu_ids=gpu_ids,
-                    image=settings.docker_image,
+                    image=worker_target["image"],
                     env=env,
                     api_key=user_runpod_key,
-                    template_id=settings.runpod_template_id,
+                    template_id=worker_target["template_id"],
                     workers_min=min(settings.runpod_workers_min, allowed_workers_max),
                     workers_max=allowed_workers_max,
                     idle_timeout=settings.runpod_idle_timeout_seconds,

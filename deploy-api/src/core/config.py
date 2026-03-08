@@ -82,9 +82,48 @@ class Settings(BaseSettings):
         min_length=1,
         description="Docker image for Runpod inference workers",
     )
+    docker_image_image: str = Field(
+        default="visgateai/inference-image:latest",
+        min_length=1,
+        description="Docker image for image-focused Runpod workers",
+    )
+    docker_image_audio: str = Field(
+        default="visgateai/inference-audio:latest",
+        min_length=1,
+        description="Docker image for audio-focused Runpod workers",
+    )
+    docker_image_video: str = Field(
+        default="visgateai/inference-video:latest",
+        min_length=1,
+        description="Docker image for video-focused Runpod workers",
+    )
     runpod_template_id: str = Field(
         default="",
         description="Runpod template ID for the inference image (create in Runpod console)",
+    )
+    runpod_template_id_image: str = Field(
+        default="",
+        validation_alias=AliasChoices(
+            "visgate_deploy_api_runpod_template_id_image",
+            "runpod_template_id_image",
+        ),
+        description="Runpod template ID for image worker deployments",
+    )
+    runpod_template_id_audio: str = Field(
+        default="",
+        validation_alias=AliasChoices(
+            "visgate_deploy_api_runpod_template_id_audio",
+            "runpod_template_id_audio",
+        ),
+        description="Runpod template ID for audio worker deployments",
+    )
+    runpod_template_id_video: str = Field(
+        default="",
+        validation_alias=AliasChoices(
+            "visgate_deploy_api_runpod_template_id_video",
+            "runpod_template_id_video",
+        ),
+        description="Runpod template ID for video worker deployments",
     )
     runpod_volume_size_gb: int = Field(
         default=0,
@@ -337,6 +376,9 @@ class Settings(BaseSettings):
                 return value.strip()
 
         self.runpod_template_id = _resolve(self.runpod_template_id)
+        self.runpod_template_id_image = _resolve(self.runpod_template_id_image)
+        self.runpod_template_id_audio = _resolve(self.runpod_template_id_audio)
+        self.runpod_template_id_video = _resolve(self.runpod_template_id_video)
         self.internal_webhook_secret = _resolve(self.internal_webhook_secret)
         self.hf_pro_access_token = _resolve(self.hf_pro_access_token)
         self.r2_access_key_id_rw = _resolve(self.r2_access_key_id_rw)

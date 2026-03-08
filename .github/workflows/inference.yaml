@@ -8,12 +8,20 @@ on:
       - 'inference/**'
   workflow_dispatch:
 
-env:
-  IMAGE_NAME: visgateai/inference
-
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - dockerfile: ./inference/Dockerfile
+            tags: |
+              visgateai/inference-image:latest
+              visgateai/inference:latest
+          - dockerfile: ./inference/Dockerfile.audio
+            tags: visgateai/inference-audio:latest
+          - dockerfile: ./inference/Dockerfile.video
+            tags: visgateai/inference-video:latest
     permissions:
       contents: read
       packages: write
@@ -55,9 +63,9 @@ jobs:
         uses: docker/build-push-action@v5
         with:
           context: ./inference
-          file: ./inference/Dockerfile
+          file: ${{ matrix.dockerfile }}
           push: true
-          tags: ${{ env.IMAGE_NAME }}:latest
+          tags: ${{ matrix.tags }}
 
       - name: Skip Docker push (credentials missing)
         if: steps.dockerhub.outputs.enabled != 'true'

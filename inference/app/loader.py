@@ -78,6 +78,20 @@ def load_pipeline_optimized(model_id: str, token: str = None, device: str = "cud
       2. S3 cache miss → full S3 sync  → load from disk  (~35-60s)
       3. No S3 config  → HF Hub download (first time) or HF cache hit
     """
+    model_id, use_local = resolve_model_source(model_id)
+
+    if not use_local:
+        # Speed up HF Hub downloads with hf_transfer (C-based, ~5× faster)
+        os.environ.setdefault("HF_HUB_ENABLE_HF_TRANSFER", "1")
+
+    print(f"Loading pipeline from: {model_id} (local={use_local})")
+    from pipelines.registry import load_pipeline
+    pipeline = load_pipeline(model_id=model_id, token=token, device=device)
+    return (pipeline, use_local)
+
+
+def resolve_model_source(model_id: str) -> tuple[str, bool]:
+    """Return the effective model source path, preferring a synced S3 path when available."""
     s3_url = os.environ.get("S3_MODEL_URL")
     volume_path = "/runpod-volume"
 
@@ -88,17 +102,8 @@ def load_pipeline_optimized(model_id: str, token: str = None, device: str = "cud
     if s3_url:
         synced = sync_from_s3(s3_url, local_path)
         if synced:
-            # Tell HF libraries not to try network calls — model is fully local
             os.environ["TRANSFORMERS_OFFLINE"] = "1"
             os.environ["DIFFUSERS_OFFLINE"] = "1"
             model_id = local_path
             use_local = True
-
-    if not use_local:
-        # Speed up HF Hub downloads with hf_transfer (C-based, ~5× faster)
-        os.environ.setdefault("HF_HUB_ENABLE_HF_TRANSFER", "1")
-
-    print(f"Loading pipeline from: {model_id} (local={use_local})")
-    from pipelines.registry import load_pipeline
-    pipeline = load_pipeline(model_id=model_id, token=token, device=device)
-    return (pipeline, use_local)
+    return model_id, use_local

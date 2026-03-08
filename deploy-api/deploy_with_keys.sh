@@ -38,6 +38,9 @@ load_optional_var() {
 
 for f in "${REPO_ROOT}/deploy-api/.env" "${REPO_ROOT}/.env.local"; do
   load_optional_var "${f}" "RUNPOD_TEMPLATE_ID"
+  load_optional_var "${f}" "RUNPOD_TEMPLATE_ID_IMAGE"
+  load_optional_var "${f}" "RUNPOD_TEMPLATE_ID_AUDIO"
+  load_optional_var "${f}" "RUNPOD_TEMPLATE_ID_VIDEO"
   load_optional_var "${f}" "INTERNAL_WEBHOOK_BASE_URL"
 done
 
@@ -59,6 +62,12 @@ gcloud run deploy "${SERVICE_NAME}" \
   --update-env-vars "GCP_LOCATION=${REGION}" \
   --update-env-vars "LOG_LEVEL=INFO" \
   --update-env-vars "DOCKER_IMAGE=visgateai/inference:latest" \
+  --update-env-vars "DOCKER_IMAGE_IMAGE=visgateai/inference-image:latest" \
+  --update-env-vars "DOCKER_IMAGE_AUDIO=visgateai/inference-audio:latest" \
+  --update-env-vars "DOCKER_IMAGE_VIDEO=visgateai/inference-video:latest" \
+  --update-env-vars "RUNPOD_TEMPLATE_ID_IMAGE=${RUNPOD_TEMPLATE_ID_IMAGE:-}" \
+  --update-env-vars "RUNPOD_TEMPLATE_ID_AUDIO=${RUNPOD_TEMPLATE_ID_AUDIO:-}" \
+  --update-env-vars "RUNPOD_TEMPLATE_ID_VIDEO=${RUNPOD_TEMPLATE_ID_VIDEO:-}" \
   --update-env-vars "INTERNAL_WEBHOOK_BASE_URL=${INTERNAL_WEBHOOK_BASE_URL_VALUE}" \
   --port 8080 \
   --project "${PROJECT_ID}"

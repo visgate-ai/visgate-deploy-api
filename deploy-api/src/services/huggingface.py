@@ -70,7 +70,8 @@ async def validate_model(
         _hf_params_millions: list[int | None] = [None]
 
         def _check() -> None:
-            api = HfApi(token=token)
+            normalized_token = token.strip() if isinstance(token, str) else token
+            api = HfApi(token=normalized_token or None)
             last_err = None
             for attempt in range(3):
                 try:

@@ -15,6 +15,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 os.environ.setdefault("GCP_PROJECT_ID", "visgate")
+os.environ.setdefault("RUNPOD_TEMPLATE_ID", "tpl-default")
 
 
 # ---------------------------------------------------------------------------

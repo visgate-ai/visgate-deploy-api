@@ -95,3 +95,13 @@ def test_root_path_reads_from_visgate_env(monkeypatch: pytest.MonkeyPatch) -> No
     monkeypatch.setenv("VISGATE_DEPLOY_API_ROOT_PATH", "/deployapi")
     s = Settings()
     assert s.root_path == "/deployapi"
+
+
+def test_modality_template_aliases_read_from_visgate_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("VISGATE_DEPLOY_API_RUNPOD_TEMPLATE_ID_IMAGE", "tpl-image")
+    monkeypatch.setenv("VISGATE_DEPLOY_API_RUNPOD_TEMPLATE_ID_AUDIO", "tpl-audio")
+    monkeypatch.setenv("VISGATE_DEPLOY_API_RUNPOD_TEMPLATE_ID_VIDEO", "tpl-video")
+    s = Settings()
+    assert s.runpod_template_id_image == "tpl-image"
+    assert s.runpod_template_id_audio == "tpl-audio"
+    assert s.runpod_template_id_video == "tpl-video"

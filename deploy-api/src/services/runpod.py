@@ -17,6 +17,50 @@ from src.services.base_provider import (
 from src.services.provider_factory import register_provider
 
 
+async def create_serverless_template(
+    *,
+    api_key: str,
+    name: str,
+    image_name: str,
+    container_disk_in_gb: int = 20,
+    volume_in_gb: int = 0,
+    docker_args: str = "",
+    readme: str = "",
+    env: list[dict[str, str]] | None = None,
+    template_id: str | None = None,
+) -> dict[str, Any]:
+    provider = RunpodProvider()
+    mutation = """
+    mutation SaveTemplate($input: SaveTemplateInput!) {
+      saveTemplate(input: $input) {
+        id
+        name
+        imageName
+        isServerless
+        containerDiskInGb
+        volumeInGb
+      }
+    }
+    """
+    input_obj: dict[str, Any] = {
+        "name": name,
+        "imageName": image_name,
+        "isServerless": True,
+        "containerDiskInGb": container_disk_in_gb,
+        "volumeInGb": volume_in_gb,
+        "dockerArgs": docker_args,
+        "readme": readme,
+        "env": env or [],
+    }
+    if template_id:
+        input_obj["id"] = template_id
+    data = await provider._graphql_request(api_key, mutation, {"input": input_obj})
+    result = data.get("saveTemplate")
+    if not result:
+        raise RunpodAPIError("saveTemplate returned no data")
+    return result
+
+
 class RunpodProvider(BaseInferenceProvider):
     def __init__(self, graphql_url: str = "https://api.runpod.io/graphql"):
         self.graphql_url = graphql_url
