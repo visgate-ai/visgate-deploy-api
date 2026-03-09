@@ -1,5 +1,6 @@
 import os
 import subprocess
+import time
 from typing import Any
 
 
@@ -55,33 +56,55 @@ def sync_from_s3(s3_url: str, local_path: str) -> bool:
             shutil.rmtree(local_path, ignore_errors=True)
 
     os.makedirs(local_path, exist_ok=True)
-    _log("INFO", f"🚀 Syncing model from S3: {s3_url}")
+    endpoint_for_log = os.environ.get("VISGATE_R2_ENDPOINT_URL") or os.environ.get("AWS_ENDPOINT_URL", "(none)")
+    _log("INFO", f"🚀 Syncing model from S3: {s3_url} endpoint={endpoint_for_log}")
 
     concurrency = os.environ.get("S5CMD_CONCURRENCY", "50")
     part_size = os.environ.get("S5CMD_PART_SIZE_MB", "50")
+
+    # Read R2 credentials from VISGATE_R2_* vars (avoids RunPod overriding standard AWS_* vars).
+    # Fall back to AWS_* for local/custom deployments that set them directly.
+    r2_key = os.environ.get("VISGATE_R2_ACCESS_KEY_ID") or os.environ.get("AWS_ACCESS_KEY_ID", "")
+    r2_secret = os.environ.get("VISGATE_R2_SECRET_ACCESS_KEY") or os.environ.get("AWS_SECRET_ACCESS_KEY", "")
+    endpoint_url = os.environ.get("VISGATE_R2_ENDPOINT_URL") or os.environ.get("AWS_ENDPOINT_URL", "")
+
     cmd = ["s5cmd", "--numworkers", concurrency]
-    endpoint_url = os.environ.get("AWS_ENDPOINT_URL")
     if endpoint_url:
         cmd.extend(["--endpoint-url", endpoint_url])
     cmd.extend(["cp", "--part-size", part_size, f"{s3_url.rstrip('/')}/*", local_path])
 
+    # Build a clean subprocess env: start from current env, then inject R2 credentials
+    # explicitly so RunPod's own AWS_* vars cannot shadow them.
+    subproc_env = {**os.environ}
+    if r2_key:
+        subproc_env["AWS_ACCESS_KEY_ID"] = r2_key
+    if r2_secret:
+        subproc_env["AWS_SECRET_ACCESS_KEY"] = r2_secret
+    # Remove any RunPod-injected endpoint/region overrides — we pass --endpoint-url explicitly.
+    subproc_env.pop("AWS_ENDPOINT_URL", None)
+    subproc_env.pop("AWS_DEFAULT_REGION", None)
+    subproc_env.pop("AWS_REGION", None)
+
+    t_sync_start = time.time()
     try:
-        subprocess.run(cmd, check=True)
+        subprocess.run(cmd, check=True, env=subproc_env)
+        t_sync_elapsed = time.time() - t_sync_start
         # s5cmd exits 0 even when the source glob matched nothing ("no object found").
         # Detect this: if the destination has no files the sync silently did nothing.
         file_count = _count_local_files(local_path)
         if file_count == 0:
-            _log("WARN", "❌ S3 sync appeared to succeed but destination is empty (s5cmd 'no object found'). Falling back to HuggingFace.")
+            _log("WARN", f"❌ S3 sync appeared to succeed but destination is empty (s5cmd 'no object found'). Falling back to HuggingFace.")
             import shutil
             shutil.rmtree(local_path, ignore_errors=True)
             return False
         # Write completion marker only after confirming files were actually synced
         with open(marker_path, "w") as f:
             f.write("ok")
-        _log("INFO", "✅ S3 sync complete.")
+        _log("INFO", f"✅ S3 sync complete. files={file_count} elapsed={t_sync_elapsed:.1f}s")
         return True
     except subprocess.CalledProcessError as e:
-        _log("WARN", f"❌ S3 sync failed (exit {e.returncode}), falling back to HuggingFace.")
+        t_sync_elapsed = time.time() - t_sync_start
+        _log("WARN", f"❌ S3 sync failed (exit {e.returncode}) after {t_sync_elapsed:.1f}s, falling back to HuggingFace.")
         return False
 
 
@@ -120,14 +143,17 @@ def resolve_model_source(model_id: str) -> tuple[str, bool]:
     use_local = False
     if s3_url:
         _log("INFO", f"S3_MODEL_URL set — attempting R2 sync: {s3_url}")
+        t0 = time.time()
         synced = sync_from_s3(s3_url, local_path)
+        elapsed = time.time() - t0
         if synced:
+            _log("INFO", f"✅ R2 sync done in {elapsed:.1f}s — loading from disk")
             os.environ["TRANSFORMERS_OFFLINE"] = "1"
             os.environ["DIFFUSERS_OFFLINE"] = "1"
             model_id = local_path
             use_local = True
         else:
-            _log("INFO", "R2 sync skipped/failed — downloading from HuggingFace")
+            _log("INFO", f"R2 sync skipped/failed after {elapsed:.1f}s — downloading from HuggingFace")
     else:
         _log("INFO", f"No S3_MODEL_URL — downloading from HuggingFace: {model_id}")
     return model_id, use_local

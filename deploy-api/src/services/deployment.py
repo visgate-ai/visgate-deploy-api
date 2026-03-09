@@ -380,12 +380,15 @@ async def orchestrate_deployment(
         # or fall back to empty string (worker downloads from HuggingFace directly).
         effective_s3_model_url = s3_model_url or computed_s3_model_url or ""
 
+        # Use VISGATE_R2_* prefixed names instead of standard AWS_* to prevent
+        # RunPod from overriding them with its own internal AWS credentials.
+        # loader.py reads these and injects them explicitly into the s5cmd subprocess env.
         if effective_access_key:
-            env["AWS_ACCESS_KEY_ID"] = effective_access_key
+            env["VISGATE_R2_ACCESS_KEY_ID"] = effective_access_key
         if effective_secret_key:
-            env["AWS_SECRET_ACCESS_KEY"] = effective_secret_key
+            env["VISGATE_R2_SECRET_ACCESS_KEY"] = effective_secret_key
         if effective_endpoint:
-            env["AWS_ENDPOINT_URL"] = effective_endpoint
+            env["VISGATE_R2_ENDPOINT_URL"] = effective_endpoint
         if effective_s3_model_url:
             env["S3_MODEL_URL"] = effective_s3_model_url
 

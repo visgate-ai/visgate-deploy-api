@@ -116,8 +116,8 @@ async def test_worker_gets_r2_ro_key_not_rw(monkeypatch):
             aws_secret_access_key=None,
         )
 
-    assert captured_env.get("AWS_ACCESS_KEY_ID") == "ro_key_EXPECTED"
-    assert captured_env.get("AWS_SECRET_ACCESS_KEY") == "ro_secret_EXPECTED"
+    assert captured_env.get("VISGATE_R2_ACCESS_KEY_ID") == "ro_key_EXPECTED"
+    assert captured_env.get("VISGATE_R2_SECRET_ACCESS_KEY") == "ro_secret_EXPECTED"
     assert "rw_key_SHOULD_NOT_BE_IN_WORKER" not in captured_env.values()
     assert "rw_secret_SHOULD_NOT_BE_IN_WORKER" not in captured_env.values()
     get_settings.cache_clear()
@@ -151,8 +151,8 @@ async def test_worker_gets_user_private_key_over_platform_ro(monkeypatch):
             aws_secret_access_key="user_private_secret",
         )
 
-    assert captured_env.get("AWS_ACCESS_KEY_ID") == "user_private_key"
-    assert captured_env.get("AWS_SECRET_ACCESS_KEY") == "user_private_secret"
+    assert captured_env.get("VISGATE_R2_ACCESS_KEY_ID") == "user_private_key"
+    assert captured_env.get("VISGATE_R2_SECRET_ACCESS_KEY") == "user_private_secret"
     assert "ro_platform_key" not in captured_env.values()
     get_settings.cache_clear()
 
