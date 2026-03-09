@@ -252,7 +252,7 @@ class InferenceJobCreate(BaseModel):
     input: dict[str, Any] = Field(default_factory=dict)
     user_webhook_url: HttpUrl | None = Field(default=None, description="Optional user webhook for job completion notifications")
     policy: InferencePolicy | None = None
-    s3_config: InferenceS3Config = Field(..., alias="s3Config")
+    s3_config: InferenceS3Config | None = Field(default=None, alias="s3Config")
 
     @field_validator("task", mode="before")
     @classmethod
@@ -294,8 +294,7 @@ class InferenceJobAcceptedResponse(BaseModel):
     provider_job_id: str
     status: InferenceJobStatus = "queued"
     provider_status: str
-    output_destination: InferenceOutputDestination
-    created_at: datetime
+    output_destination: InferenceOutputDestination | None = None
 
 
 class InferenceJobListResponse(BaseModel):

@@ -196,9 +196,9 @@ async def create_inference_job(
         body.input,
         webhook_url=provider_webhook,
         policy=body.policy.model_dump(exclude_none=True) if body.policy else None,
-        s3_config=body.s3_config.model_dump(exclude_none=True),
+        s3_config=body.s3_config.model_dump(exclude_none=True) if body.s3_config else {},
     )
-    output_destination = sanitize_s3_config(body.s3_config.model_dump(exclude_none=True))
+    output_destination = sanitize_s3_config(body.s3_config.model_dump(exclude_none=True) if body.s3_config else {})
 
     doc = InferenceJobDoc(
         job_id=job_id,

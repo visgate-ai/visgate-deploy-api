@@ -174,24 +174,29 @@ def test_get_inference_job_refreshes_provider_status(
     provider.get_job_status.assert_awaited_once()
 
 
-def test_create_inference_job_requires_s3_config(
+def test_create_inference_job_without_s3_config_is_accepted(
     client: TestClient,
     firestore_mock,
     auth_headers: dict,
 ) -> None:
+    """s3Config is optional; omitting it should still be accepted (not 422)."""
     runpod_key = auth_headers["Authorization"].split(" ", 1)[1]
     set_deployment(firestore_mock, "deployments", _ready_deployment_doc(runpod_key))
+    provider = Mock()
+    provider.list_gpu_types = AsyncMock(return_value=[])
+    provider.submit_job = AsyncMock(return_value={"id": "rp_job_nosec", "status": "IN_QUEUE", "raw_response": {}})
 
-    resp = client.post(
-        "/v1/inference/jobs",
-        json={
-            "deployment_id": "dep_2026_ready123",
-            "input": {"prompt": "A futuristic skyline"},
-        },
-        headers=auth_headers,
-    )
+    with patch("src.api.routes.inference.get_provider", return_value=provider):
+        resp = client.post(
+            "/v1/inference/jobs",
+            json={
+                "deployment_id": "dep_2026_ready123",
+                "input": {"prompt": "A futuristic skyline"},
+            },
+            headers=auth_headers,
+        )
 
-    assert resp.status_code == 422
+    assert resp.status_code == 202
 
 
 def test_get_inference_job_estimates_cost_from_gpu_price(

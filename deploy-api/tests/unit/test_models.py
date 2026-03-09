@@ -112,12 +112,13 @@ def test_deployment_create_webhook_optional() -> None:
     assert body.user_webhook_url is None
 
 
-def test_inference_job_create_requires_s3_config() -> None:
-    with pytest.raises(ValidationError):
-        InferenceJobCreate(
-            deployment_id="dep_2026_ready123",
-            input={"prompt": "test"},
-        )
+def test_inference_job_create_s3_config_is_optional() -> None:
+    """s3Config is optional — omitting it should produce a valid object."""
+    job = InferenceJobCreate(
+        deployment_id="dep_2026_ready123",
+        input={"prompt": "test"},
+    )
+    assert job.s3_config is None
 
 
 def test_log_entry_roundtrip() -> None:
