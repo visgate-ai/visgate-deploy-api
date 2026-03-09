@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.7.0] - 2026-03-09 — Video e2e smoke passing
+
+### Added
+- **Per-deployment RunPod template**: each deployment creates its own template with `dep_template_id` / `dep_template_name` stored in Firestore; template deleted automatically on `DELETE /v1/deployments/{id}` — eliminates template pollution and quota leakage.
+- **`_container_disk_gb()` in `deployment.py`**: returns 50 GB for `video` worker profile (was hardcoded 25 GB) — fixes *"No space left on device"* when 13 GB container image + 10 GB Wan model exceeded disk.
+- **Real-time worker logs via `log_tunnel`**: `loader.py` now calls `_log()` helper that forwards loading progress to both `print()` (RunPod dashboard) and `log_tunnel()` (API SSE stream at `/v1/deployments/{id}/stream`). Covers R2 sync attempts, fallback-to-HuggingFace, s5cmd errors, and load completion.
+- `delete_template()` in `runpod.py` — GraphQL mutation to tear down a RunPod template by ID.
+- `internal_urls.py` — centralizes Cloud Run internal URL helpers.
+- `scripts/live_video_smoke.py` and `scripts/live_endpoint_audit.py` added.
+
+### Fixed
+- **`_extract_frames()` in `video_worker.py`**: complete rewrite to handle WAN 2.1 pipeline output which returns a NumPy ndarray of shape `(batch, num_frames, H, W, C)` — fixes `ValueError: The truth value of an array with more than one element is ambiguous`.
+- `requirements-video.txt`: added `sentencepiece>=0.1.99` and `ftfy>=6.1.1` (required by WAN tokenizer, missing caused ImportError at worker startup).
+- `runtime_common.py`: increased `urlopen` timeout from 10 s to 30 s for log-tunnel POST under high load.
+- `video_worker.py`: `_notify_orchestrator` now retries up to 5 times (was 3) with exponential back-off.
+
+### Test
+- All 106 unit tests passing.
+- E2E smoke `dep_2026_2777c2ef`: `text2video` job COMPLETED — 25,914-byte mp4 generated in 2,253 ms execution time using `Wan-AI/Wan2.1-T2V-1.3B-Diffusers`.
+
 ## [0.6.0] - 2026-03-05 — API cleanup + production hardening
 
 ### Changed
