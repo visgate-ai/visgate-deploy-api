@@ -94,7 +94,7 @@ def _cache_model_once(hf_model_id: str, hf_token: str | None) -> dict[str, objec
     import boto3
     import requests
     from boto3.s3.transfer import TransferConfig
-    from huggingface_hub import list_repo_tree
+    from huggingface_hub import RepoFile, list_repo_tree
 
     settings = get_settings()
 
@@ -129,7 +129,7 @@ def _cache_model_once(hf_model_id: str, hf_token: str | None) -> dict[str, objec
     hf_headers = {"Authorization": f"Bearer {hf_token}"} if hf_token else {}
     file_count = 0
     for item in list_repo_tree(hf_model_id, recursive=True, token=hf_token or None):
-        if getattr(item, "type", None) != "file":
+        if not isinstance(item, RepoFile):  # skip RepoFolder (directory) entries
             continue
         file_path = item.path
         if _should_skip_file(file_path):
@@ -142,10 +142,13 @@ def _cache_model_once(hf_model_id: str, hf_token: str | None) -> dict[str, objec
 
         s3_key = f"{s3_prefix}/{file_path}"
         file_size = int(resp.headers.get("Content-Length", 0)) or None
-        extra_args = {"ContentLength": file_size} if file_size else {}
-        s3.upload_fileobj(resp.raw, "visgate-models", s3_key, ExtraArgs=extra_args, Config=transfer_cfg)
+        s3.upload_fileobj(resp.raw, "visgate-models", s3_key, Config=transfer_cfg)
         file_count += 1
         _task_log("INFO", f"Streamed to R2: {file_path}", s3_key=s3_key, size_bytes=file_size)
+
+    if file_count == 0:
+        _task_log("WARN", "No uploadable files found — manifest NOT updated", hf_model_id=hf_model_id)
+        return {"status": "ok", "files_uploaded": 0, "manifest_updated": False}
 
     manifest_updated = add_model_to_manifest(
         model_id=hf_model_id,
