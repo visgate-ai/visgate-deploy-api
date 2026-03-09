@@ -18,9 +18,9 @@ POLL_SECONDS = int(os.environ.get("POLL_SECONDS", "5"))
 POLL_ATTEMPTS = int(os.environ.get("POLL_ATTEMPTS", "30"))
 
 MODELS = [
-    ("image", "stabilityai/sdxl-turbo"),
-    ("audio", "openai/whisper-large-v3"),
-    ("video", "Wan-AI/Wan2.1-T2V-1.3B"),
+    ("image", "stabilityai/sdxl-turbo", "text_to_image"),
+    ("audio", "openai/whisper-large-v3", "speech_to_text"),
+    ("video", "Wan-AI/Wan2.1-T2V-1.3B", "text_to_video"),
 ]
 
 
@@ -47,16 +47,21 @@ def main() -> int:
     client = firestore.Client(project=PROJECT_ID)
     results: list[dict] = []
 
-    for expected_profile, model_id in MODELS:
+    for expected_profile, model_id, task in MODELS:
         created = _request(
             f"{API_BASE.rstrip('/')}/v1/deployments",
             method="POST",
-            body={"hf_model_id": model_id, "user_webhook_url": "https://httpbin.org/post"},
+            body={
+                "hf_model_id": model_id,
+                "task": task,
+                "user_webhook_url": "https://httpbin.org/post",
+            },
         )
         deployment_id = created["deployment_id"]
         result = {
             "expected_profile": expected_profile,
             "model_id": model_id,
+            "task": task,
             "deployment_id": deployment_id,
         }
         try:
@@ -68,6 +73,9 @@ def main() -> int:
                         "error": data.get("error"),
                         "endpoint_url": data.get("endpoint_url"),
                         "runpod_endpoint_id": data.get("runpod_endpoint_id"),
+                        "worker_profile": data.get("worker_profile"),
+                        "worker_template_id": data.get("worker_template_id"),
+                        "worker_image": data.get("worker_image"),
                         "logs": (data.get("logs") or [])[-8:],
                     }
                 )

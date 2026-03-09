@@ -1,10 +1,5 @@
-runpod>=1.6.0
-torch>=2.1.0
-diffusers>=0.30.0
-transformers>=4.36.0
-accelerate>=0.25.0
-safetensors>=0.4.0
-hf_transfer>=0.1.4
-Pillow>=10.0.0
 imageio>=2.34.0
 imageio-ffmpeg>=0.5.1
+# WAN T5 text encoder requires sentencepiece and ftfy
+sentencepiece>=0.1.99
+ftfy>=6.1.1

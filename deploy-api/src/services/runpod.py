@@ -135,7 +135,7 @@ class RunpodProvider(BaseInferenceProvider):
             "scalerType": kwargs.get("scaler_type", "QUEUE_DELAY"),
             "scalerValue": kwargs.get("scaler_value", 2),
             "workersMin": kwargs.get("workers_min", 1),
-            "workersMax": kwargs.get("workers_max", 2),
+            "workersMax": kwargs.get("workers_max", 1),
             "env": runpod_env
         }
 
@@ -164,6 +164,20 @@ class RunpodProvider(BaseInferenceProvider):
         }
         """
         await self._graphql_request(api_key, mutation, {"id": endpoint_id})
+
+    async def delete_template(self, template_name: str, api_key: str) -> None:
+        """Best-effort deletion of a per-deployment template.
+
+        The template must not be in use by any running endpoint.  Call this
+        only AFTER delete_endpoint has completed.  Failures are not propagated
+        — the caller should catch and log them.
+        """
+        mutation = """
+        mutation DeleteTemplate($name: String!) {
+          deleteTemplate(templateName: $name)
+        }
+        """
+        await self._graphql_request(api_key, mutation, {"name": template_name})
 
     async def list_endpoints(self, api_key: str) -> list[ProviderEndpointSummary]:
         query = """

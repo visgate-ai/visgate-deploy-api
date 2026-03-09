@@ -148,6 +148,38 @@ def test_post_deployments_persists_request_base_for_internal_callbacks(
     get_settings.cache_clear()
 
 
+@patch("src.api.routes.deployments.enqueue_orchestration_task", new_callable=AsyncMock)
+@patch("src.api.routes.deployments.set_deployment")
+def test_post_deployments_prefers_forwarded_https_base_for_internal_callbacks(
+    mock_set_deployment,
+    mock_enqueue,
+    client: TestClient,
+    auth_headers: dict,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("INTERNAL_WEBHOOK_BASE_URL", raising=False)
+    get_settings.cache_clear()
+
+    resp = client.post(
+        "/v1/deployments",
+        json={
+            "hf_model_id": "black-forest-labs/FLUX.1-schnell",
+            "user_runpod_key": "rpa_xxx",
+        },
+        headers={
+            **auth_headers,
+            "x-forwarded-proto": "https",
+            "x-forwarded-host": "visgate-deploy-api.example.com",
+        },
+    )
+
+    assert resp.status_code == 202
+    stored_doc = mock_set_deployment.call_args.args[2]
+    assert stored_doc.internal_webhook_base_url == "https://visgate-deploy-api.example.com"
+    mock_enqueue.assert_called_once()
+    get_settings.cache_clear()
+
+
 def test_post_deployments_401_without_auth(client: TestClient, deployment_create_payload: dict) -> None:
     """POST without Bearer returns 401."""
     resp = client.post("/v1/deployments", json=deployment_create_payload)

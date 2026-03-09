@@ -35,6 +35,7 @@ DEVICE: str = "cuda"  # Runpod provides GPU
 # Default inference
 DEFAULT_NUM_INFERENCE_STEPS: int = 28
 DEFAULT_GUIDANCE_SCALE: float = 3.5
+MODEL_LOAD_WAIT_TIMEOUT_SECONDS: int = int(get_env("MODEL_LOAD_WAIT_TIMEOUT_SECONDS", "270") or "270")
 
 # Optional output delivery
 OUTPUT_S3_URL: Optional[str] = get_env("OUTPUT_S3_URL")

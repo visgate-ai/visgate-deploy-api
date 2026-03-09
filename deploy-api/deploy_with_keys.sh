@@ -42,7 +42,8 @@ for f in "${REPO_ROOT}/deploy-api/.env" "${REPO_ROOT}/.env.local"; do
 done
 
 CLOUD_TASKS_QUEUE_PATH="projects/${PROJECT_ID}/locations/${REGION}/queues/visgate-orchestrator-queue"
-INTERNAL_WEBHOOK_BASE_URL_VALUE="${INTERNAL_WEBHOOK_BASE_URL:-}"  # Set INTERNAL_WEBHOOK_BASE_URL to your Cloud Run service URL
+EXISTING_SERVICE_URL="$(gcloud run services describe "${SERVICE_NAME}" --region "${REGION}" --project "${PROJECT_ID}" --format='value(status.url)' 2>/dev/null || true)"
+INTERNAL_WEBHOOK_BASE_URL_VALUE="${INTERNAL_WEBHOOK_BASE_URL:-${EXISTING_SERVICE_URL:-}}"
 
 gcloud run deploy "${SERVICE_NAME}" \
   --image "${IMAGE}" \
@@ -62,6 +63,11 @@ gcloud run deploy "${SERVICE_NAME}" \
   --update-env-vars "DOCKER_IMAGE_IMAGE=visgateai/inference-image:latest" \
   --update-env-vars "DOCKER_IMAGE_AUDIO=visgateai/inference-audio:latest" \
   --update-env-vars "DOCKER_IMAGE_VIDEO=visgateai/inference-video:latest" \
+  --update-env-vars "RUNPOD_WORKERS_MAX=1" \
+  --update-env-vars "RUNPOD_WORKERS_MIN=0" \
+  --update-env-vars "RUNPOD_WORKERS_MIN_VIDEO=1" \
+  --update-env-vars "RUNPOD_EXECUTION_TIMEOUT_MS=300000" \
+  --update-env-vars "RUNPOD_EXECUTION_TIMEOUT_MS_VIDEO=900000" \
   --update-env-vars "INTERNAL_WEBHOOK_BASE_URL=${INTERNAL_WEBHOOK_BASE_URL_VALUE}" \
   --remove-env-vars "RUNPOD_TEMPLATE_ID_IMAGE,RUNPOD_TEMPLATE_ID_AUDIO,RUNPOD_TEMPLATE_ID_VIDEO" \
   --port 8080 \

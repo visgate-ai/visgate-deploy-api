@@ -27,6 +27,7 @@ from src.services.r2_manifest import (
     fetch_cached_model_ids,
     model_s3_url,
 )
+from src.services.runpod import create_serverless_template
 from src.services.secret_cache import get_secrets
 from src.services.webhook import notify
 from src.services.worker_routing import resolve_worker_target
@@ -63,6 +64,93 @@ def get_tier_mapping(*args, **kwargs):
 
 def update_deployment(*args, **kwargs):
     return _get_repo().update_deployment(*args, **kwargs)
+
+
+def _format_log_message(message: str, **kwargs: object) -> str:
+    fields = []
+    for key, value in kwargs.items():
+        if value in (None, "", [], {}, ()):  # keep Firestore log lines compact
+            continue
+        fields.append(f"{key}={value}")
+    if not fields:
+        return message
+    return f"{message} [{', '.join(fields)}]"
+
+
+def _execution_timeout_ms(settings, worker_profile: str) -> int:
+    if worker_profile == "video":
+        return settings.runpod_execution_timeout_ms_video
+    return settings.runpod_execution_timeout_ms
+
+
+def _runtime_hf_model_id(hf_model_id: str) -> str:
+    runtime_aliases = {
+        "Wan-AI/Wan2.1-T2V-1.3B": "Wan-AI/Wan2.1-T2V-1.3B-Diffusers",
+        "Wan-AI/Wan2.1-T2V-14B": "Wan-AI/Wan2.1-T2V-14B-Diffusers",
+    }
+    return runtime_aliases.get(hf_model_id, hf_model_id)
+
+
+def _uses_health_probe_readiness(worker_profile: str) -> bool:
+    return worker_profile != "video"
+
+
+def _uses_shared_model_cache(worker_profile: str) -> bool:
+    return True
+
+
+def _workers_min(settings, worker_profile: str, workers_max: int) -> int:
+    if worker_profile == "video":
+        return min(settings.runpod_workers_min_video, workers_max)
+    return min(settings.runpod_workers_min, workers_max)
+
+
+def _model_load_wait_timeout_seconds(settings, worker_profile: str) -> int | None:
+    if worker_profile != "video":
+        return None
+    execution_timeout_seconds = max(settings.runpod_execution_timeout_ms_video // 1000, 1)
+    return max(execution_timeout_seconds - 60, 60)
+
+
+def _runpod_init_timeout_seconds(settings, worker_profile: str) -> int | None:
+    if worker_profile != "video":
+        return None
+    return max(settings.runpod_execution_timeout_ms_video // 1000, 1)
+
+
+def _container_disk_gb(worker_profile: str) -> int:
+    # Video image is ~13 GB; Wan models are ~10-11 GB + hf_transfer chunk headroom.
+    # Image workers need ~25 GB (13 GB image + up to ~12 GB for SDXL / FLUX models).
+    return 50 if worker_profile == "video" else 25
+
+
+async def _create_deployment_template(
+    *,
+    api_key: str,
+    worker_profile: str,
+    image: str,
+    deployment_id: str,
+    env: list[dict[str, str]],
+) -> tuple[str, str]:
+    """Create a fresh per-deployment serverless template with env baked in.
+
+    RunPod only injects TEMPLATE-level env as container OS env vars; endpoint-
+    level env is metadata only. Using per-deployment templates avoids the shared
+    template race condition while correctly propagating all deployment-specific
+    env vars (HF_MODEL_ID, VISGATE_WEBHOOK, S3_MODEL_URL, etc.) to workers.
+
+    Returns (template_id, template_name).
+    """
+    # Use a short but unique name derived from deployment_id
+    template_name = f"visgate-dep-{deployment_id[-12:]}"
+    result = await create_serverless_template(
+        api_key=api_key,
+        name=template_name,
+        image_name=image,
+        container_disk_in_gb=_container_disk_gb(worker_profile),
+        env=env,
+    )
+    return result["id"], template_name
 
 def _now_iso() -> str:
     return datetime.now(UTC).isoformat().replace("+00:00", "Z")
@@ -126,6 +214,7 @@ async def orchestrate_deployment(
     ctx = get_trace_context()
 
     def log_step(level: str, msg: str, **kwargs: object) -> None:
+        formatted_message = _format_log_message(msg, **kwargs)
         structured_log(
             level,
             msg,
@@ -135,7 +224,7 @@ async def orchestrate_deployment(
             span_id=ctx.get("span_id"),
             metadata=kwargs,
         )
-        append_log(client, coll, deployment_id, level, msg)
+        append_log(client, coll, deployment_id, level, formatted_message)
 
     def is_capacity_error(message: str) -> bool:
         m = (message or "").lower()
@@ -165,7 +254,8 @@ async def orchestrate_deployment(
             log_step("ERROR", "Deployment doc not found")
             return
 
-        hf_model_id = doc.hf_model_id
+        requested_hf_model_id = doc.hf_model_id
+        runtime_hf_model_id = _runtime_hf_model_id(requested_hf_model_id)
         cached = None
         if not runpod_api_key:
             cached = get_secrets(deployment_id)
@@ -191,14 +281,27 @@ async def orchestrate_deployment(
         provider_name = "runpod"
         provider = get_provider(provider_name)
 
+        worker_target = resolve_worker_target(settings, requested_hf_model_id, doc.task)
+
         # 1. Validate HF model
         update_deployment(client, coll, deployment_id, {"status": "validating"})
-        log_step("INFO", "Validating Hugging Face model")
-        with span("deployment.validate_hf", {"hf_model_id": hf_model_id}):
-            model_info = await validate_model(hf_model_id, token=hf_token)
+        log_step(
+            "INFO",
+            "Validating Hugging Face model",
+            requested_hf_model_id=requested_hf_model_id,
+            runtime_hf_model_id=runtime_hf_model_id,
+        )
+        with span("deployment.validate_hf", {"hf_model_id": runtime_hf_model_id}):
+            model_info = await validate_model(runtime_hf_model_id, token=hf_token)
         vram_gb = model_info.min_gpu_memory_gb
         update_deployment(client, coll, deployment_id, {"model_vram_gb": vram_gb})
-        log_step("INFO", "HF model validated", hf_model_id=hf_model_id, min_gpu_memory_gb=vram_gb)
+        log_step(
+            "INFO",
+            "HF model validated",
+            requested_hf_model_id=requested_hf_model_id,
+            runtime_hf_model_id=runtime_hf_model_id,
+            min_gpu_memory_gb=vram_gb,
+        )
 
         # 1.5. Check R2 model cache — if present, worker will download from R2
         # The platform RW key lives only in the API (never sent to workers).
@@ -207,20 +310,30 @@ async def orchestrate_deployment(
         # On cache miss: separate Cloud Task will download from HF and upload to R2.
         computed_s3_model_url: str | None = None
         trigger_cache_model_task: bool = False
-        if settings.r2_access_key_id_rw and settings.r2_endpoint_url and not s3_model_url:
-            per_model_url = model_s3_url(settings.r2_model_base_url, hf_model_id)
+        if settings.r2_access_key_id_rw and settings.r2_endpoint_url and not s3_model_url and _uses_shared_model_cache(worker_target["profile"]):
+            per_model_url = model_s3_url(settings.r2_model_base_url, runtime_hf_model_id)
             update_deployment(client, coll, deployment_id, {"status": "checking_r2_cache"})
-            log_step("INFO", "Checking R2 model cache", hf_model_id=hf_model_id)
+            log_step(
+                "INFO",
+                "Checking R2 model cache",
+                requested_hf_model_id=requested_hf_model_id,
+                runtime_hf_model_id=runtime_hf_model_id,
+            )
             cached_ids = fetch_cached_model_ids(
                 settings.r2_endpoint_url,
                 settings.r2_access_key_id_rw,
                 settings.r2_secret_access_key_rw,
             )
-            if hf_model_id in cached_ids:
+            if runtime_hf_model_id in cached_ids:
                 computed_s3_model_url = per_model_url
                 log_step("INFO", "R2 cache hit — worker will sync from R2", s3_url=computed_s3_model_url)
             else:
-                log_step("INFO", "R2 cache miss — separate job will download and cache", hf_model_id=hf_model_id)
+                log_step(
+                    "INFO",
+                    "R2 cache miss — separate job will download and cache",
+                    requested_hf_model_id=requested_hf_model_id,
+                    runtime_hf_model_id=runtime_hf_model_id,
+                )
                 trigger_cache_model_task = True
 
         # 2. Select GPU
@@ -236,11 +349,8 @@ async def orchestrate_deployment(
             provider=provider_name,
         )
 
-        # 3. Create Cloud Endpoint
-        update_deployment(client, coll, deployment_id, {"status": "creating_endpoint"})
-
         env = {
-            "HF_MODEL_ID": hf_model_id,
+            "HF_MODEL_ID": runtime_hf_model_id,
             "VISGATE_DEPLOYMENT_ID": deployment_id,
         }
         if doc.task:
@@ -301,7 +411,26 @@ async def orchestrate_deployment(
         # Common data for all providers
         endpoint_name = doc.endpoint_name or f"visgate-{deployment_id}"
         locations = (doc.region or settings.runpod_default_locations).strip()
-        worker_target = resolve_worker_target(settings, hf_model_id, doc.task)
+        execution_timeout_ms = _execution_timeout_ms(settings, worker_target["profile"])
+        model_load_wait_timeout_seconds = _model_load_wait_timeout_seconds(settings, worker_target["profile"])
+        if model_load_wait_timeout_seconds is not None:
+            env["MODEL_LOAD_WAIT_TIMEOUT_SECONDS"] = str(model_load_wait_timeout_seconds)
+        runpod_init_timeout_seconds = _runpod_init_timeout_seconds(settings, worker_target["profile"])
+        if runpod_init_timeout_seconds is not None:
+            env["RUNPOD_INIT_TIMEOUT"] = str(runpod_init_timeout_seconds)
+
+        # 3. Create Cloud Endpoint
+        update_deployment(
+            client,
+            coll,
+            deployment_id,
+            {
+                "status": "creating_endpoint",
+                "worker_profile": worker_target["profile"],
+                "worker_template_id": worker_target["template_id"],
+                "worker_image": worker_target["image"],
+            },
+        )
 
         # MULTI-GPU TARGETING: Select top 3 candidates to increase availability
         target_candidates = gpu_candidates[:3]
@@ -313,7 +442,25 @@ async def orchestrate_deployment(
             f"Deploying to GPU pool: {target_display}",
             target_ids=target_ids,
             worker_profile=worker_target["profile"],
-            template_id=worker_target["template_id"],
+            image=worker_target["image"],
+        )
+        # Build the env list for the per-deployment template (RunPod only injects
+        # template-level env as container OS env vars; endpoint env is metadata only)
+        runpod_template_env = [{"key": k, "value": str(v)} for k, v in env.items()]
+        dep_template_id, dep_template_name = await _create_deployment_template(
+            api_key=user_runpod_key,
+            worker_profile=worker_target["profile"],
+            image=worker_target["image"],
+            deployment_id=deployment_id,
+            env=runpod_template_env,
+        )
+        update_deployment(client, coll, deployment_id, {"runpod_dep_template_name": dep_template_name})
+        log_step(
+            "INFO",
+            "Created per-deployment RunPod template with env",
+            worker_profile=worker_target["profile"],
+            dep_template_id=dep_template_id,
+            dep_template_name=dep_template_name,
             image=worker_target["image"],
         )
 
@@ -323,10 +470,11 @@ async def orchestrate_deployment(
                     name=endpoint_name,
                     gpu_ids=gpu_ids,
                     image=worker_target["image"],
-                    env=env,
+                    env={},
                     api_key=user_runpod_key,
-                    template_id=worker_target["template_id"],
-                    workers_min=min(settings.runpod_workers_min, workers_max),
+                    template_id=dep_template_id,
+                    execution_timeout_ms=execution_timeout_ms,
+                    workers_min=_workers_min(settings, worker_target["profile"], workers_max),
                     workers_max=workers_max,
                     idle_timeout=settings.runpod_idle_timeout_seconds,
                     scaler_type=settings.runpod_scaler_type,
@@ -349,10 +497,11 @@ async def orchestrate_deployment(
                     name=endpoint_name,
                     gpu_ids=gpu_ids,
                     image=worker_target["image"],
-                    env=env,
+                    env={},
                     api_key=user_runpod_key,
-                    template_id=worker_target["template_id"],
-                    workers_min=min(settings.runpod_workers_min, allowed_workers_max),
+                    template_id=dep_template_id,
+                    execution_timeout_ms=execution_timeout_ms,
+                    workers_min=_workers_min(settings, worker_target["profile"], allowed_workers_max),
                     workers_max=allowed_workers_max,
                     idle_timeout=settings.runpod_idle_timeout_seconds,
                     scaler_type=settings.runpod_scaler_type,
@@ -400,6 +549,9 @@ async def orchestrate_deployment(
                 "endpoint_url": endpoint_url,
                 "gpu_allocated": target_display,
                 "provider": provider_name,
+                "worker_profile": worker_target["profile"],
+                "worker_template_id": worker_target["template_id"],
+                "worker_image": worker_target["image"],
                 "gpu_pool_targeted": target_ids,
             },
         )
@@ -417,7 +569,7 @@ async def orchestrate_deployment(
             try:
                 from src.services.tasks import enqueue_cache_model_task
                 await enqueue_cache_model_task(
-                    hf_model_id=hf_model_id,
+                    hf_model_id=runtime_hf_model_id,
                     hf_token=hf_token,
                 )
                 log_step("INFO", "Enqueued background cache modeling task")
@@ -452,16 +604,17 @@ async def orchestrate_deployment(
                 )
                 return
 
-            ready, probe_error = await _probe_runpod_readiness(endpoint_url, user_runpod_key)
-            if ready:
-                log_step("INFO", "Readiness probe succeeded; marking deployment ready")
-                await mark_deployment_ready_and_notify(
-                    deployment_id,
-                    endpoint_url=_as_run_url(endpoint_url),
-                )
-                return
-            if probe_error:
-                log_step("WARNING", "Readiness probe retry", error=probe_error)
+            if _uses_health_probe_readiness(worker_target["profile"]):
+                ready, probe_error = await _probe_runpod_readiness(endpoint_url, user_runpod_key)
+                if ready:
+                    log_step("INFO", "Readiness probe succeeded; marking deployment ready")
+                    await mark_deployment_ready_and_notify(
+                        deployment_id,
+                        endpoint_url=_as_run_url(endpoint_url),
+                    )
+                    return
+                if probe_error:
+                    log_step("WARNING", "Readiness probe retry", error=probe_error)
             await asyncio.sleep(monitor_interval_seconds)
     except HuggingFaceModelNotFoundError as e:
         update_deployment(

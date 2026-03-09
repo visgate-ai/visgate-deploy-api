@@ -75,9 +75,34 @@ MODEL_SPECS_REGISTRY: dict[str, dict[str, Any]] = {
         "gpu_memory_gb": 40,
         "tasks": ["text2img"],
     },
+    # ── Audio / Speech ───────────────────────────────────────────────────────
+    "openai/whisper-large-v3": {
+        "gpu_memory_gb": 10,
+        "tasks": ["speech_to_text"],
+    },
+    "openai/whisper-large-v3-turbo": {
+        "gpu_memory_gb": 8,
+        "tasks": ["speech_to_text"],
+    },
+    "microsoft/speecht5_tts": {
+        "gpu_memory_gb": 8,
+        "tasks": ["text_to_speech"],
+    },
+    "suno/bark": {
+        "gpu_memory_gb": 16,
+        "tasks": ["text_to_speech"],
+    },
     # ── Wan Video ────────────────────────────────────────────────────────────
+    "Wan-AI/Wan2.1-T2V-14B": {
+        "gpu_memory_gb": 80,
+        "tasks": ["text2video"],
+    },
     "Wan-AI/Wan2.1-T2V-14B-Diffusers": {
         "gpu_memory_gb": 80,
+        "tasks": ["text2video"],
+    },
+    "Wan-AI/Wan2.1-T2V-1.3B": {
+        "gpu_memory_gb": 16,
         "tasks": ["text2video"],
     },
     "Wan-AI/Wan2.1-T2V-1.3B-Diffusers": {
@@ -85,6 +110,10 @@ MODEL_SPECS_REGISTRY: dict[str, dict[str, Any]] = {
         "tasks": ["text2video"],
     },
     # ── CogVideoX ────────────────────────────────────────────────────────────
+    "THUDM/CogVideoX-2b": {
+        "gpu_memory_gb": 24,
+        "tasks": ["text2video"],
+    },
     "THUDM/CogVideoX-5b": {
         "gpu_memory_gb": 48,
         "tasks": ["text2video"],

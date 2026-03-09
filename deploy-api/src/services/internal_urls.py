@@ -14,6 +14,17 @@ def resolve_internal_base_url(request: Request | None = None) -> str:
         return configured
     if request is None:
         return ""
+
+    forwarded_proto = (request.headers.get("x-forwarded-proto") or request.url.scheme or "https").split(",", 1)[0].strip()
+    forwarded_host = (
+        request.headers.get("x-forwarded-host")
+        or request.headers.get("host")
+        or request.url.netloc
+    ).split(",", 1)[0].strip()
+    root_path = (request.scope.get("root_path") or "").rstrip("/")
+
+    if forwarded_host:
+        return f"{forwarded_proto}://{forwarded_host}{root_path}".rstrip("/")
     return str(request.base_url).rstrip("/")
 
 

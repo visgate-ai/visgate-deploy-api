@@ -149,8 +149,14 @@ class Settings(BaseSettings):
             "Use 1 only when sub-second response latency is required."
         ),
     )
+    runpod_workers_min_video: int = Field(
+        default=1,
+        ge=0,
+        le=10,
+        description="Minimum warm workers for video endpoints to avoid first-job cold starts after deployment readiness.",
+    )
     runpod_workers_max: int = Field(
-        default=2,
+        default=1,
         ge=1,
         le=20,
         description="Maximum concurrent workers per endpoint",
@@ -177,6 +183,18 @@ class Settings(BaseSettings):
             "QUEUE_DELAY seconds before RunPod starts a new worker. "
             "1 = scale out immediately when a job waits 1s (lower latency, slightly more workers)."
         ),
+    )
+    runpod_execution_timeout_ms: int = Field(
+        default=300000,
+        ge=5000,
+        le=604800000,
+        description="Default RunPod execution timeout for endpoint jobs in milliseconds",
+    )
+    runpod_execution_timeout_ms_video: int = Field(
+        default=900000,
+        ge=5000,
+        le=604800000,
+        description="RunPod execution timeout for video endpoint jobs in milliseconds",
     )
 
     # Webhook
@@ -278,7 +296,10 @@ class Settings(BaseSettings):
             "black-forest-labs/FLUX.1-schnell,"
             "stabilityai/stable-diffusion-xl-base-1.0,"
             "stabilityai/sdxl-turbo,"
-            "stabilityai/stable-diffusion-3.5-large"
+            "stabilityai/stable-diffusion-3.5-large,"
+            "openai/whisper-large-v3,"
+            "Wan-AI/Wan2.1-T2V-1.3B,"
+            "Wan-AI/Wan2.1-T2V-1.3B-Diffusers"
         ),
         description="Comma-separated model allowlist for shared cache mode",
     )

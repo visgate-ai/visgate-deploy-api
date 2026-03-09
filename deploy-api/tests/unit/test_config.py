@@ -105,3 +105,16 @@ def test_modality_template_aliases_read_from_visgate_env(monkeypatch: pytest.Mon
     assert s.runpod_template_id_image == "tpl-image"
     assert s.runpod_template_id_audio == "tpl-audio"
     assert s.runpod_template_id_video == "tpl-video"
+
+
+def test_shared_cache_allowlist_includes_validated_audio_and_video_models() -> None:
+    s = Settings()
+    assert "openai/whisper-large-v3" in s.shared_cache_allowed_models
+    assert "Wan-AI/Wan2.1-T2V-1.3B" in s.shared_cache_allowed_models
+    assert "Wan-AI/Wan2.1-T2V-1.3B-Diffusers" in s.shared_cache_allowed_models
+
+
+def test_video_workers_min_defaults_to_one() -> None:
+    s = Settings()
+    assert s.runpod_workers_min == 0
+    assert s.runpod_workers_min_video == 1

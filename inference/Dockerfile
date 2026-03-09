@@ -18,9 +18,9 @@ RUN apt-get update && apt-get install -y wget && \
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir \
     runpod \
-    "diffusers==0.30.3" \
-    "transformers==4.44.2" \
-    "accelerate==0.33.0" \
+    "diffusers>=0.33.0,<0.34.0" \
+    "transformers>=4.44.2,<5.0.0" \
+    "accelerate>=0.33.0" \
     safetensors \
     hf_transfer \
     Pillow

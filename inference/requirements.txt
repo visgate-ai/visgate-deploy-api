@@ -3,8 +3,8 @@ runpod>=1.6.0
 
 # Hugging Face diffusion
 torch>=2.1.0
-diffusers>=0.30.0
-transformers>=4.36.0
+diffusers>=0.33.0,<0.34.0
+transformers>=4.44.2,<5.0.0
 accelerate>=0.25.0
 safetensors>=0.4.0
 

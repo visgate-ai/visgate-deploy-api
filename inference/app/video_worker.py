@@ -21,6 +21,7 @@ from app.config import (
     DEVICE,
     HF_MODEL_ID,
     HF_TOKEN,
+    MODEL_LOAD_WAIT_TIMEOUT_SECONDS,
     VISGATE_WEBHOOK,
 )
 from app.loader import resolve_model_source
@@ -32,18 +33,26 @@ _last_request_at: float = 0.0
 _failure_count: int = 0
 
 
+def _runtime_video_model_id(model_id: str) -> str:
+    aliases = {
+        "Wan-AI/Wan2.1-T2V-1.3B": "Wan-AI/Wan2.1-T2V-1.3B-Diffusers",
+        "Wan-AI/Wan2.1-T2V-14B": "Wan-AI/Wan2.1-T2V-14B-Diffusers",
+    }
+    return aliases.get(model_id, model_id)
+
+
 def _notify_orchestrator(status: str, message: str | None = None) -> None:
     if not VISGATE_WEBHOOK or not VISGATE_WEBHOOK.strip():
         return
     payload = {"status": status}
     if message:
         payload["message"] = message
-    for attempt in range(3):
+    for attempt in range(5):
         try:
             post_json(VISGATE_WEBHOOK, payload)
             return
         except Exception:
-            if attempt < 2:
+            if attempt < 4:
                 time.sleep(2 ** attempt)
 
 
@@ -58,8 +67,9 @@ def _load_model_background() -> None:
     from diffusers import DiffusionPipeline
 
     try:
-        model_source, _ = resolve_model_source(HF_MODEL_ID)
-        log_tunnel("INFO", f"Loading video model: {HF_MODEL_ID}")
+        effective_model_id = _runtime_video_model_id(HF_MODEL_ID)
+        model_source, _ = resolve_model_source(effective_model_id)
+        log_tunnel("INFO", f"Loading video model: requested={HF_MODEL_ID} runtime={effective_model_id}")
         _notify_orchestrator("loading_model", "Video model loading started")
         _pipeline = DiffusionPipeline.from_pretrained(model_source, torch_dtype=_torch_dtype(), token=HF_TOKEN)
         if DEVICE.startswith("cuda"):
@@ -74,23 +84,52 @@ def _load_model_background() -> None:
 
 
 def _extract_frames(output: Any) -> list[np.ndarray]:
-    if hasattr(output, "frames") and output.frames:
-        frames = output.frames[0] if isinstance(output.frames, list) and output.frames and isinstance(output.frames[0], list) else output.frames
-    elif isinstance(output, dict) and output.get("frames"):
-        frames = output["frames"]
-        if frames and isinstance(frames[0], list):
-            frames = frames[0]
-    elif hasattr(output, "images") and output.images:
-        frames = output.images
-    else:
+    frames_raw = None
+    if hasattr(output, "frames") and output.frames is not None:
+        frames_raw = output.frames
+    elif isinstance(output, dict) and output.get("frames") is not None:
+        frames_raw = output["frames"]
+    elif hasattr(output, "images") and output.images is not None:
+        frames_raw = output.images
+
+    if frames_raw is None:
         raise RuntimeError("Video pipeline returned no frames")
-    arrays: list[np.ndarray] = []
-    for frame in frames:
-        if hasattr(frame, "convert"):
-            arrays.append(np.array(frame.convert("RGB")))
+
+    # WAN diffusers 0.33: frames is np.ndarray (batch, num_frames, H, W, C)
+    # or List[List[PIL]] or List[np.ndarray]
+    if isinstance(frames_raw, np.ndarray):
+        if frames_raw.ndim == 5:
+            frames_raw = frames_raw[0]  # (num_frames, H, W, C)
+        arrays = [frames_raw[i] for i in range(len(frames_raw))]
+    elif isinstance(frames_raw, list):
+        # Batch wrapper: [[frame, frame, ...]]
+        if frames_raw and isinstance(frames_raw[0], (list, np.ndarray)) and not hasattr(frames_raw[0], "convert"):
+            if isinstance(frames_raw[0], np.ndarray) and frames_raw[0].ndim >= 3:
+                # List[np.ndarray] where each is (H, W, C) — already flat
+                arrays = [np.asarray(f) for f in frames_raw]
+            else:
+                frames_raw = frames_raw[0]
+                arrays = []
+                for frame in frames_raw:
+                    arrays.append(np.array(frame.convert("RGB")) if hasattr(frame, "convert") else np.asarray(frame))
         else:
-            arrays.append(np.asarray(frame))
-    return arrays
+            arrays = []
+            for frame in frames_raw:
+                arrays.append(np.array(frame.convert("RGB")) if hasattr(frame, "convert") else np.asarray(frame))
+    else:
+        raise RuntimeError(f"Unexpected frames type: {type(frames_raw)}")
+
+    # Ensure uint8 [0,255] for imageio
+    result = []
+    for arr in arrays:
+        arr = np.asarray(arr)
+        if arr.dtype != np.uint8:
+            if arr.max() <= 1.0:
+                arr = (arr * 255).clip(0, 255).astype(np.uint8)
+            else:
+                arr = arr.clip(0, 255).astype(np.uint8)
+        result.append(arr)
+    return result
 
 
 def handler(job: dict[str, Any]) -> dict[str, Any]:
@@ -99,9 +138,9 @@ def handler(job: dict[str, Any]) -> dict[str, Any]:
     if _pipeline is None:
         wait_start = time.time()
         while _pipeline is None and _load_error is None:
-            if time.time() - wait_start > 600:
+            if time.time() - wait_start > MODEL_LOAD_WAIT_TIMEOUT_SECONDS:
                 return {"error": "Model failed to load within timeout.", "status": "loading"}
-            time.sleep(5)
+            time.sleep(2)
         if _load_error:
             return {"error": f"Model load failed: {_load_error}", "status": "failed"}
     prompt = job_input.get("prompt")

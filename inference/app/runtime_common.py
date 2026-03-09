@@ -38,7 +38,7 @@ def post_json(url: str, payload: dict[str, Any]) -> None:
         headers["X-Visgate-Internal-Secret"] = VISGATE_INTERNAL_SECRET
     data = json.dumps(payload).encode("utf-8")
     req = urllib.request.Request(url, data=data, headers=headers, method="POST")
-    with urllib.request.urlopen(req, timeout=10):
+    with urllib.request.urlopen(req, timeout=30):
         return
 
 

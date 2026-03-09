@@ -18,6 +18,8 @@ from src.models.schemas import DeploymentCreate, InferenceJobCreate
 def test_model_specs_registry_has_seed_models() -> None:
     assert "black-forest-labs/FLUX.1-schnell" in MODEL_SPECS_REGISTRY
     assert "stabilityai/sdxl-turbo" in MODEL_SPECS_REGISTRY
+    assert "openai/whisper-large-v3" in MODEL_SPECS_REGISTRY
+    assert "Wan-AI/Wan2.1-T2V-1.3B" in MODEL_SPECS_REGISTRY
 
 
 def test_get_vram_gb_known_model() -> None:
@@ -132,9 +134,15 @@ def test_deployment_doc_roundtrip() -> None:
         user_runpod_key_ref="ref",
         user_webhook_url="https://x.com",
         logs=[LogEntry("2024-01-01T00:00:00Z", "INFO", "msg")],
+        worker_profile="audio",
+        worker_template_id="tpl-audio",
+        worker_image="visgateai/inference-audio:latest",
     )
     d = doc.to_firestore_dict()
     doc2 = DeploymentDoc.from_firestore_dict(d)
     assert doc2.deployment_id == doc.deployment_id
     assert len(doc2.logs) == 1
     assert doc2.logs[0].message == "msg"
+    assert doc2.worker_profile == "audio"
+    assert doc2.worker_template_id == "tpl-audio"
+    assert doc2.worker_image == "visgateai/inference-audio:latest"

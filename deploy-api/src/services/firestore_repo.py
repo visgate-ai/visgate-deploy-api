@@ -115,19 +115,17 @@ def list_deployments(
     limit: int = 20,
 ) -> list[DeploymentDoc]:
     """List deployments belonging to a given user (by user_hash), newest first."""
-    query = (
-        client.collection(collection)
-        .where(filter=FieldFilter("user_hash", "==", user_hash))
-        .order_by("created_at", direction=firestore.Query.DESCENDING)
-        .limit(min(limit, 100))
-    )
-    if status_filter:
-        query = query.where(filter=FieldFilter("status", "==", status_filter))
-    return [
-        DeploymentDoc.from_firestore_dict(snap.to_dict())
-        for snap in query.stream()
-        if snap.to_dict()
-    ]
+    query = client.collection(collection).where(filter=FieldFilter("user_hash", "==", user_hash))
+    docs = []
+    for snap in query.stream():
+        data = snap.to_dict()
+        if not data:
+            continue
+        if status_filter and data.get("status") != status_filter:
+            continue
+        docs.append(DeploymentDoc.from_firestore_dict(data))
+    docs.sort(key=lambda doc: doc.created_at or "", reverse=True)
+    return docs[: min(limit, 100)]
 
 
 def find_reusable_deployment(
@@ -202,7 +200,13 @@ def list_inference_jobs(
     limit: int = 20,
 ) -> list[InferenceJobDoc]:
     query = client.collection(collection).where(filter=FieldFilter("user_hash", "==", user_hash))
-    if deployment_id:
-        query = query.where(filter=FieldFilter("deployment_id", "==", deployment_id))
-    query = query.order_by("created_at", direction=firestore.Query.DESCENDING).limit(min(limit, 100))
-    return [InferenceJobDoc.from_firestore_dict(snap.to_dict()) for snap in query.stream() if snap.to_dict()]
+    docs = []
+    for snap in query.stream():
+        data = snap.to_dict()
+        if not data:
+            continue
+        if deployment_id and data.get("deployment_id") != deployment_id:
+            continue
+        docs.append(InferenceJobDoc.from_firestore_dict(data))
+    docs.sort(key=lambda doc: doc.created_at or "", reverse=True)
+    return docs[: min(limit, 100)]

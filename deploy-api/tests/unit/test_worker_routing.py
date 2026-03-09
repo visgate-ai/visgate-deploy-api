@@ -8,8 +8,12 @@ def test_infer_worker_profile_prefers_task() -> None:
     assert infer_worker_profile("Wan-AI/Wan2.1-T2V-1.3B", "text_to_video") == VIDEO_PROFILE
 
 
-def test_infer_worker_profile_uses_model_heuristics() -> None:
+def test_infer_worker_profile_uses_registry_for_exact_audio_and_video_models() -> None:
     assert infer_worker_profile("openai/whisper-large-v3") == AUDIO_PROFILE
+    assert infer_worker_profile("Wan-AI/Wan2.1-T2V-1.3B") == VIDEO_PROFILE
+
+
+def test_infer_worker_profile_falls_back_to_model_heuristics() -> None:
     assert infer_worker_profile("THUDM/CogVideoX-2b") == VIDEO_PROFILE
     assert infer_worker_profile("stabilityai/sdxl-turbo") == IMAGE_PROFILE
 

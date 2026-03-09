@@ -81,8 +81,11 @@ jobs:
             DOCKER_IMAGE_AUDIO=visgateai/inference-audio:latest
             DOCKER_IMAGE_VIDEO=visgateai/inference-video:latest
             LOG_LEVEL=INFO
-            RUNPOD_WORKERS_MAX=2
+            RUNPOD_WORKERS_MAX=1
             RUNPOD_WORKERS_MIN=0
+            RUNPOD_WORKERS_MIN_VIDEO=1
+            RUNPOD_EXECUTION_TIMEOUT_MS=300000
+            RUNPOD_EXECUTION_TIMEOUT_MS_VIDEO=900000
           secrets: |
             RUNPOD_TEMPLATE_ID=VISGATE_DEPLOY_API_RUNPOD_TEMPLATE_ID:latest
             RUNPOD_TEMPLATE_ID_IMAGE=VISGATE_DEPLOY_API_RUNPOD_TEMPLATE_ID_IMAGE:latest

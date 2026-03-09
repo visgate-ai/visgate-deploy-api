@@ -50,7 +50,11 @@ class DeploymentDoc:
     pool_policy: str | None = None
     region: str | None = None
     task: str | None = None
+    worker_profile: str | None = None
+    worker_template_id: str | None = None
+    worker_image: str | None = None
     internal_webhook_base_url: str | None = None
+    runpod_dep_template_name: str | None = None
 
     def to_firestore_dict(self) -> dict[str, Any]:
         return {
@@ -76,7 +80,11 @@ class DeploymentDoc:
             "pool_policy": self.pool_policy,
             "region": self.region,
             "task": self.task,
+            "worker_profile": self.worker_profile,
+            "worker_template_id": self.worker_template_id,
+            "worker_image": self.worker_image,
             "internal_webhook_base_url": self.internal_webhook_base_url,
+            "runpod_dep_template_name": self.runpod_dep_template_name,
         }
 
     @classmethod
@@ -105,7 +113,11 @@ class DeploymentDoc:
             pool_policy=d.get("pool_policy"),
             region=d.get("region"),
             task=d.get("task"),
+            worker_profile=d.get("worker_profile"),
+            worker_template_id=d.get("worker_template_id"),
+            worker_image=d.get("worker_image"),
             internal_webhook_base_url=d.get("internal_webhook_base_url"),
+            runpod_dep_template_name=d.get("runpod_dep_template_name"),
         )
 
 
