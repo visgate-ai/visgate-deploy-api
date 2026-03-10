@@ -325,6 +325,7 @@ async def test_worker_target_is_persisted_and_logged(monkeypatch):
         stack.enter_context(patch("src.services.deployment.get_secrets", return_value=None))
         stack.enter_context(patch("src.services.deployment._probe_runpod_readiness", new_callable=AsyncMock, return_value=(True, None)))
         stack.enter_context(patch("src.services.deployment.get_provider", return_value=mock_provider))
+        stack.enter_context(patch("src.services.deployment.create_serverless_template", new_callable=AsyncMock, return_value={"id": "tpl-audio"}))
 
         from src.services.deployment import orchestrate_deployment
 
