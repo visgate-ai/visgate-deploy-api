@@ -6,17 +6,12 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import queue
-import re
-import socket
 import subprocess
 import threading
 import time
 import urllib.error
-import urllib.parse
 import urllib.request
 from dataclasses import dataclass
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
@@ -95,9 +90,6 @@ MODALITY_CONFIGS: dict[str, dict[str, Any]] = {
     },
 }
 
-WEBHOOK_EVENTS: dict[str, list[dict[str, Any]]] = {}
-WEBHOOK_LOCK = threading.Lock()
-
 
 def _auth_headers() -> dict[str, str]:
     return {
@@ -127,92 +119,6 @@ def _poll_json(url: str, terminal_statuses: set[str], *, timeout_seconds: int) -
             return last_payload
         time.sleep(5)
     raise TimeoutError(f"Timed out waiting for terminal status at {url}; last payload={last_payload}")
-
-
-class _WebhookHandler(BaseHTTPRequestHandler):
-    def do_GET(self) -> None:  # noqa: N802
-        self.send_response(200)
-        self.send_header("Content-Type", "application/json")
-        self.end_headers()
-        self.wfile.write(b'{"ok":true}')
-
-    def do_HEAD(self) -> None:  # noqa: N802
-        self.send_response(200)
-        self.end_headers()
-
-    def do_POST(self) -> None:  # noqa: N802
-        length = int(self.headers.get("Content-Length", "0"))
-        raw = self.rfile.read(length) if length else b"{}"
-        try:
-            body = json.loads(raw.decode("utf-8"))
-        except Exception:
-            body = {"raw": raw.decode("utf-8", errors="replace")}
-        event = {
-            "path": self.path,
-            "headers": {k: v for k, v in self.headers.items()},
-            "body": body,
-            "received_at": time.time(),
-        }
-        with WEBHOOK_LOCK:
-            WEBHOOK_EVENTS.setdefault(self.path, []).append(event)
-        self.send_response(204)
-        self.end_headers()
-
-    def log_message(self, format: str, *args: Any) -> None:  # noqa: A003
-        return
-
-
-def _start_webhook_server() -> tuple[ThreadingHTTPServer, int]:
-    server = ThreadingHTTPServer(("127.0.0.1", 0), _WebhookHandler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    return server, int(server.server_address[1])
-
-
-def _start_cloudflared(port: int) -> tuple[subprocess.Popen[str], str]:
-    log_path = Path("cloudflared.log")
-    if log_path.exists():
-        log_path.unlink()
-    process = subprocess.Popen(
-        [
-            "cloudflared",
-            "tunnel",
-            "--url",
-            f"http://127.0.0.1:{port}",
-            "--no-autoupdate",
-            "--logfile",
-            str(log_path),
-        ],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        text=True,
-    )
-    pattern = re.compile(r"https://[a-z0-9-]+\.trycloudflare\.com")
-    deadline = time.time() + 60
-    while time.time() < deadline:
-        if log_path.exists():
-            text = log_path.read_text(encoding="utf-8", errors="replace")
-            match = pattern.search(text)
-            if match:
-                return process, match.group(0)
-        if process.poll() is not None:
-            raise RuntimeError("cloudflared exited before publishing a tunnel URL")
-        time.sleep(1)
-    raise TimeoutError("Timed out waiting for cloudflared tunnel URL")
-
-
-def _wait_for_tunnel_ready(tunnel_url: str, *, timeout_seconds: int = 90) -> None:
-    deadline = time.time() + timeout_seconds
-    probe_url = f"{tunnel_url.rstrip('/')}/healthz"
-    while time.time() < deadline:
-        try:
-            with urllib.request.urlopen(probe_url, timeout=10) as response:
-                if 200 <= response.status < 300:
-                    return
-        except Exception:
-            pass
-        time.sleep(2)
-    raise TimeoutError(f"Timed out waiting for tunnel readiness at {probe_url}")
 
 
 @dataclass
@@ -268,15 +174,8 @@ def _stop_sse_capture(capture: SseCapture) -> list[dict[str, Any]]:
     return capture.events
 
 
-def _wait_for_webhook(path: str, *, timeout_seconds: int) -> dict[str, Any]:
-    deadline = time.time() + timeout_seconds
-    while time.time() < deadline:
-        with WEBHOOK_LOCK:
-            events = list(WEBHOOK_EVENTS.get(path, []))
-        if events:
-            return events[-1]
-        time.sleep(1)
-    raise TimeoutError(f"Timed out waiting for webhook {path}")
+def _webhook_url(kind: str, modality: str) -> str:
+    return f"https://httpbin.org/anything/{kind}-{modality}"
 
 
 def _head_object(client: Any, bucket: str, key: str) -> bool:
@@ -319,14 +218,45 @@ def _cloud_log_seen(deployment_id: str, started_at_iso: str) -> bool:
     return bool(result.stdout.strip())
 
 
-def _deployment_and_job(modality: str, tunnel_base: str) -> dict[str, Any]:
+def _webhook_delivery_seen(webhook_url: str, started_at_iso: str, *, timeout_seconds: int = 180) -> bool:
+    if not GCP_PROJECT_ID:
+        return False
+    deadline = time.time() + timeout_seconds
+    query = (
+        'resource.type="cloud_run_revision" '
+        'AND resource.labels.service_name="visgate-deploy-api" '
+        'AND jsonPayload.message="Webhook delivered successfully" '
+        'AND jsonPayload.operation="webhook.notify" '
+        f'AND jsonPayload.metadata.url="{webhook_url}" '
+        f'AND timestamp>="{started_at_iso}"'
+    )
+    command = [
+        "gcloud",
+        "logging",
+        "read",
+        query,
+        "--project",
+        GCP_PROJECT_ID,
+        "--limit",
+        "1",
+        "--format=value(timestamp)",
+    ]
+    while time.time() < deadline:
+        result = subprocess.run(command, capture_output=True, text=True, check=False)
+        if result.stdout.strip():
+            return True
+        time.sleep(5)
+    return False
+
+
+def _deployment_and_job(modality: str) -> dict[str, Any]:
     config = MODALITY_CONFIGS[modality]
-    deployment_webhook_path = f"/webhook/deployment-{modality}"
-    job_webhook_path = f"/webhook/job-{modality}"
+    deployment_webhook_url = _webhook_url("deployment", modality)
+    job_webhook_url = _webhook_url("job", modality)
     deployment_payload = dict(config["deployment"])
     deployment_payload["hf_token"] = HF_TOKEN
     deployment_payload["user_runpod_key"] = RUNPOD_API_KEY
-    deployment_payload["user_webhook_url"] = f"{tunnel_base}{deployment_webhook_path}"
+    deployment_payload["user_webhook_url"] = deployment_webhook_url
 
     deployment_response = _request_json("POST", f"{API_BASE}/v1/deployments", deployment_payload)
     deployment_id = deployment_response["deployment_id"]
@@ -349,28 +279,35 @@ def _deployment_and_job(modality: str, tunnel_base: str) -> dict[str, Any]:
         "deployment": deployment_final,
         "deployment_status_events": status_events,
         "deployment_log_events": log_events,
-        "deployment_webhook": deployment_webhook,
         "live_log_tunnel_seen": _cloud_log_seen(deployment_id, started_at_iso),
     }
 
     if deployment_final["status"] != "ready":
         raise RuntimeError(f"{modality} deployment did not become ready: {deployment_final}")
 
+    result["deployment_webhook_url"] = deployment_webhook_url
+    result["deployment_webhook_verified"] = _webhook_delivery_seen(deployment_webhook_url, started_at_iso)
+    if not result["deployment_webhook_verified"]:
+        raise RuntimeError(f"Timed out waiting for deployment webhook delivery log for {deployment_webhook_url}")
+
     job_payload = dict(config["job"])
     job_payload["deployment_id"] = deployment_id
-    job_payload["user_webhook_url"] = f"{tunnel_base}{job_webhook_path}"
+    job_payload["user_webhook_url"] = job_webhook_url
     job_response = _request_json("POST", f"{API_BASE}/v1/inference/jobs", job_payload)
     job_id = job_response["job_id"]
+    job_started_at_iso = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     job_final = _poll_json(
         f"{API_BASE}/v1/inference/jobs/{job_id}",
         {"completed", "failed", "cancelled", "expired"},
         timeout_seconds=1800 if modality == "video" else 900,
     )
-    job_webhook = _wait_for_webhook(job_webhook_path, timeout_seconds=180)
 
     result["job_id"] = job_id
     result["job"] = job_final
-    result["job_webhook"] = job_webhook
+    result["job_webhook_url"] = job_webhook_url
+    result["job_webhook_verified"] = _webhook_delivery_seen(job_webhook_url, job_started_at_iso)
+    if not result["job_webhook_verified"]:
+        raise RuntimeError(f"Timed out waiting for inference webhook delivery log for {job_webhook_url}")
 
     staged_field = config.get("staged_field")
     if staged_field:
@@ -383,7 +320,7 @@ def _deployment_and_job(modality: str, tunnel_base: str) -> dict[str, Any]:
             raise RuntimeError(f"{modality} staged input object not found in R2 input bucket: {staged['key']}")
 
     if config.get("expect_output"):
-        artifact = job_webhook.get("body", {}).get("artifact") or job_final.get("artifact")
+        artifact = job_final.get("artifact")
         if not isinstance(artifact, dict):
             raise RuntimeError(f"{modality} job missing artifact metadata: {job_final}")
         result["artifact"] = artifact
@@ -411,33 +348,19 @@ def main() -> int:
     if unknown:
         raise SystemExit(f"Unsupported modalities: {', '.join(unknown)}")
 
-    server, port = _start_webhook_server()
-    tunnel_process = None
     results: list[dict[str, Any]] = []
     failures: list[dict[str, Any]] = []
-    try:
-        tunnel_process, tunnel_url = _start_cloudflared(port)
-        _wait_for_tunnel_ready(tunnel_url)
-        for modality in modalities:
-            try:
-                results.append(_deployment_and_job(modality, tunnel_url))
-            except Exception as exc:
-                failure = {
-                    "modality": modality,
-                    "error": str(exc),
-                    "type": type(exc).__name__,
-                }
-                failures.append(failure)
-                results.append(failure)
-    finally:
-        server.shutdown()
-        server.server_close()
-        if tunnel_process and tunnel_process.poll() is None:
-            tunnel_process.terminate()
-            try:
-                tunnel_process.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                tunnel_process.kill()
+    for modality in modalities:
+        try:
+            results.append(_deployment_and_job(modality))
+        except Exception as exc:
+            failure = {
+                "modality": modality,
+                "error": str(exc),
+                "type": type(exc).__name__,
+            }
+            failures.append(failure)
+            results.append(failure)
 
     output_path = Path(args.output)
     output_path.write_text(json.dumps({"results": results, "failures": failures}, indent=2), encoding="utf-8")
