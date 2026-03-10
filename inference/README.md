@@ -29,19 +29,17 @@ New model families can be added by adding a pipeline class in `pipelines/` and r
     "guidance_scale": 3.5,
     "height": 1024,
     "width": 1024,
-    "seed": 42
-  },
-  "s3Config": {
-    "accessId": "AKIA...",
-    "accessSecret": "secret",
-    "bucketName": "customer-output-bucket",
-    "endpointUrl": "https://s3.example.com",
-    "keyPrefix": "visgate/jobs"
+    "seed": 42,
+    "input_image_r2": {
+      "bucket_name": "platform-input-bucket",
+      "endpoint_url": "https://<account>.r2.cloudflarestorage.com",
+      "key": "inference/inputs/job_123/input_image_url-abc.png"
+    }
   }
 }
 ```
 
-All fields except `input.prompt` are optional. `s3Config` should be provided in production so the worker uploads results directly to caller-owned storage.
+All fields except `input.prompt` are optional. In production, deploy-api stages media inputs into platform R2 and injects platform-managed output storage, so callers do not provide `s3Config`.
 
 ## Job output
 

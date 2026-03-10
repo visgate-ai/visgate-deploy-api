@@ -32,7 +32,14 @@ from app.config import (
     VISGATE_INTERNAL_SECRET,
 )
 from app.loader import resolve_model_source
-from app.runtime_common import download_to_tempfile, log_tunnel, post_json, request_cleanup, upload_bytes
+from app.runtime_common import (
+    download_r2_artifact_to_tempfile,
+    download_to_tempfile,
+    log_tunnel,
+    post_json,
+    request_cleanup,
+    upload_bytes,
+)
 from app.task_detector import detect_task
 from PIL import Image
 
@@ -89,6 +96,32 @@ def _runtime_video_model_id(model_id: str) -> str:
     return aliases.get(model_id, model_id)
 
 
+def _load_speech_to_text_pipeline(model_source: str) -> Any:
+    from transformers import AutoModelForSpeechSeq2Seq, AutoProcessor, pipeline
+
+    model_kwargs: dict[str, Any] = {
+        "token": HF_TOKEN,
+        "torch_dtype": _torch_dtype(),
+        "low_cpu_mem_usage": True,
+    }
+    processor_kwargs: dict[str, Any] = {"token": HF_TOKEN}
+
+    loaded_model = AutoModelForSpeechSeq2Seq.from_pretrained(model_source, **model_kwargs)
+    processor = AutoProcessor.from_pretrained(model_source, **processor_kwargs)
+
+    if DEVICE.startswith("cuda"):
+        loaded_model.to(DEVICE)
+
+    return pipeline(
+        "automatic-speech-recognition",
+        model=loaded_model,
+        tokenizer=processor.tokenizer,
+        feature_extractor=processor.feature_extractor,
+        torch_dtype=_torch_dtype(),
+        device=0 if DEVICE.startswith("cuda") else -1,
+    )
+
+
 def _load_model_background() -> None:
     global _pipeline, _load_error, _task_kind
 
@@ -116,10 +149,18 @@ def _load_model_background() -> None:
             if DEVICE.startswith("cuda"):
                 loaded_pipeline.to(DEVICE)
                 
-        elif task_kind in ("speech_to_text", "text_to_speech"):
+        elif task_kind == "speech_to_text":
+            loaded_pipeline = _load_speech_to_text_pipeline(model_source)
+
+        elif task_kind == "text_to_speech":
             from transformers import pipeline
-            pipeline_task = "automatic-speech-recognition" if task_kind == "speech_to_text" else "text-to-audio"
-            loaded_pipeline = pipeline(pipeline_task, model=model_source, token=HF_TOKEN, device=0 if DEVICE.startswith("cuda") else -1)
+
+            loaded_pipeline = pipeline(
+                "text-to-audio",
+                model=model_source,
+                token=HF_TOKEN,
+                device=0 if DEVICE.startswith("cuda") else -1,
+            )
 
         with _state_lock:
             _pipeline = loaded_pipeline
@@ -148,12 +189,19 @@ def _load_model_background() -> None:
 
 def _handle_image(job: dict[str, Any], job_input: dict[str, Any]) -> dict[str, Any]:
     prompt = job_input.get("prompt")
-    if not prompt and not job_input.get("input_image_url"):
-        return {"error": "Missing 'prompt' or 'input_image_url'"}
+    staged_image = job_input.get("input_image_r2") or job_input.get("image_r2")
+    if not prompt and not job_input.get("input_image_url") and not staged_image:
+        return {"error": "Missing 'prompt', 'input_image_url', or staged R2 image input"}
 
     kwargs = {}
     tmp_img = None
-    if job_input.get("input_image_url"):
+    if staged_image:
+        try:
+            tmp_img = download_r2_artifact_to_tempfile(staged_image, ".png")
+            kwargs["image"] = Image.open(tmp_img).convert("RGB")
+        except Exception as e:
+            return {"error": f"Failed to download staged input image: {e}"}
+    elif job_input.get("input_image_url"):
         try:
             tmp_img = download_to_tempfile(job_input["input_image_url"], ".png")
             kwargs["image"] = Image.open(tmp_img).convert("RGB")
@@ -280,14 +328,18 @@ def _handle_audio(job: dict[str, Any], job_input: dict[str, Any]) -> dict[str, A
         }
     else:
         # Speech to text
+        staged_audio = job_input.get("audio_r2")
         audio_url = job_input.get("audio_url") or job_input.get("audioUrl")
         temp_path = None
         try:
-            if audio_url:
+            if staged_audio:
+                temp_path = download_r2_artifact_to_tempfile(staged_audio, ".wav")
+                output = _pipeline(temp_path)
+            elif audio_url:
                 temp_path = download_to_tempfile(str(audio_url), suffix=".wav")
                 output = _pipeline(temp_path)
             else:
-                return {"error": "Missing 'audio_url' in input (base64 deprecated)", "status": "failed"}
+                return {"error": "Missing 'audio_url' or staged audio input in input (base64 deprecated)", "status": "failed"}
             
             return {
                 "text": output.get("text") if isinstance(output, dict) else str(output),

@@ -217,10 +217,6 @@ async def run_orchestration_task(
             payload.deployment_id,
             secrets["runpod_api_key"],
             secrets.get("hf_token"),
-            secrets.get("aws_access_key_id"),
-            secrets.get("aws_secret_access_key"),
-            secrets.get("aws_endpoint_url"),
-            secrets.get("s3_model_url"),
         )
     )
     return {"status": "accepted", "deployment_id": payload.deployment_id}

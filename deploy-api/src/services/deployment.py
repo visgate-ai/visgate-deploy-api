@@ -206,10 +206,6 @@ async def orchestrate_deployment(
     deployment_id: str,
     runpod_api_key: str | None = None,
     hf_token_override: str | None = None,
-    aws_access_key_id: str | None = None,
-    aws_secret_access_key: str | None = None,
-    aws_endpoint_url: str | None = None,
-    s3_model_url: str | None = None,
 ) -> None:
     """
     Background task: validate HF model -> select GPU -> create cloud endpoint via provider.
@@ -266,15 +262,6 @@ async def orchestrate_deployment(
         if not runpod_api_key:
             cached = get_secrets(deployment_id)
             runpod_api_key = cached.runpod_api_key if cached else None
-        if cached:
-            if aws_access_key_id is None:
-                aws_access_key_id = cached.aws_access_key_id
-            if aws_secret_access_key is None:
-                aws_secret_access_key = cached.aws_secret_access_key
-            if aws_endpoint_url is None:
-                aws_endpoint_url = cached.aws_endpoint_url
-            if s3_model_url is None:
-                s3_model_url = cached.s3_model_url
         if not runpod_api_key:
             update_deployment(client, coll, deployment_id, {"status": "failed", "error": "Missing Runpod API key"})
             log_step("ERROR", "Missing Runpod API key for orchestration")
@@ -282,7 +269,11 @@ async def orchestrate_deployment(
 
         user_runpod_key = runpod_api_key
         gpu_tier = doc.gpu_tier
-        hf_token: str | None = hf_token_override or (cached.hf_token if cached else None) or settings.hf_pro_access_token
+        hf_token: str | None = hf_token_override or (cached.hf_token if cached else None)
+        if not hf_token:
+            update_deployment(client, coll, deployment_id, {"status": "failed", "error": "Missing Hugging Face token"})
+            log_step("ERROR", "Missing Hugging Face token for orchestration")
+            return
         # Logic: Default to runpod for now, but could be fetched from doc metadata
         provider_name = "runpod"
         provider = get_provider(provider_name)
@@ -316,7 +307,7 @@ async def orchestrate_deployment(
         # On cache miss: separate Cloud Task will download from HF and upload to R2.
         computed_s3_model_url: str | None = None
         trigger_cache_model_task: bool = False
-        if settings.r2_access_key_id_rw and settings.r2_endpoint_url and not s3_model_url and _uses_shared_model_cache(worker_target["profile"]):
+        if settings.r2_access_key_id_rw and settings.r2_endpoint_url and _uses_shared_model_cache(worker_target["profile"]):
             per_model_url = model_s3_url(settings.r2_model_base_url, runtime_hf_model_id)
             update_deployment(client, coll, deployment_id, {"status": "checking_r2_cache"})
             log_step(
@@ -365,27 +356,11 @@ async def orchestrate_deployment(
         if hf_token:
             env["HF_TOKEN"] = hf_token
 
-        # Credentials injected into RunPod worker env:
-        #   cache_scope=private  → user's own S3-compat keys (user's bucket)
-        #   cache_scope=shared   → platform Cloudflare R2 READ-ONLY key (RW key stays in API)
-        #   cache_scope=off      → no keys injected
-        # The RW platform key (settings.r2_access_key_id_rw) is intentionally NEVER sent to workers.
-        if aws_access_key_id:
-            # User's private S3-compat credentials (cache_scope=private)
-            effective_access_key = aws_access_key_id
-            effective_secret_key = aws_secret_access_key or ""
-        elif settings.r2_access_key_id_ro:
-            # Platform shared R2 cache — read-only key only (cache_scope=shared)
-            effective_access_key = settings.r2_access_key_id_ro
-            effective_secret_key = settings.r2_secret_access_key_ro
-        else:
-            effective_access_key = ""
-            effective_secret_key = ""
-
-        effective_endpoint = aws_endpoint_url or settings.r2_endpoint_url
-        # Use user-provided URL, or the per-model R2 URL computed from the cache check,
-        # or fall back to empty string (worker downloads from HuggingFace directly).
-        effective_s3_model_url = s3_model_url or computed_s3_model_url or ""
+        # Worker receives the platform R2 read-only key for model and staged-input reads.
+        effective_access_key = settings.r2_access_key_id_ro or ""
+        effective_secret_key = settings.r2_secret_access_key_ro or ""
+        effective_endpoint = settings.r2_endpoint_url
+        effective_s3_model_url = computed_s3_model_url or ""
 
         # Use VISGATE_R2_* prefixed names instead of standard AWS_* to prevent
         # RunPod from overriding them with its own internal AWS credentials.

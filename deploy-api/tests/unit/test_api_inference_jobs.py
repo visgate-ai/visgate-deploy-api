@@ -49,13 +49,6 @@ def test_create_inference_job_returns_202(
                 "deployment_id": "dep_2026_ready123",
                 "task": "text_to_image",
                 "input": {"prompt": "A futuristic skyline"},
-                "s3Config": {
-                    "accessId": "key-id",
-                    "accessSecret": "secret-key",
-                    "bucketName": "user-results",
-                    "endpointUrl": "https://storage.example.com",
-                    "keyPrefix": "jobs/dep_2026_ready123",
-                },
             },
             headers=auth_headers,
         )
@@ -66,10 +59,12 @@ def test_create_inference_job_returns_202(
     assert data["provider_job_id"] == "rp_job_1"
     assert data["status"] == "queued"
     assert data["output_destination"] == {
-        "bucket_name": "user-results",
-        "endpoint_url": "https://storage.example.com",
-        "key_prefix": "jobs/dep_2026_ready123",
+        "bucket_name": "platform-output",
+        "endpoint_url": "https://088e0d2618d33e55a76e4d65b439d6c4.r2.cloudflarestorage.com",
+        "key_prefix": f"inference/outputs/dep_2026_ready123/{data['job_id']}",
     }
+    kwargs = provider.submit_job.await_args.kwargs
+    assert kwargs["s3_config"]["bucketName"] == "platform-output"
     provider.submit_job.assert_awaited_once()
 
 
@@ -95,12 +90,6 @@ def test_create_inference_job_uses_request_base_for_internal_callback(
                 "deployment_id": "dep_2026_ready123",
                 "task": "text_to_image",
                 "input": {"prompt": "A futuristic skyline"},
-                "s3Config": {
-                    "accessId": "key-id",
-                    "accessSecret": "secret-key",
-                    "bucketName": "user-results",
-                    "endpointUrl": "https://storage.example.com",
-                },
             },
             headers=auth_headers,
         )
@@ -149,12 +138,6 @@ def test_get_inference_job_refreshes_provider_status(
             json={
                 "deployment_id": "dep_2026_ready123",
                 "input": {"prompt": "A futuristic skyline"},
-                "s3Config": {
-                    "accessId": "key-id",
-                    "accessSecret": "secret-key",
-                    "bucketName": "user-results",
-                    "endpointUrl": "https://storage.example.com",
-                },
             },
             headers=auth_headers,
         )
@@ -174,12 +157,12 @@ def test_get_inference_job_refreshes_provider_status(
     provider.get_job_status.assert_awaited_once()
 
 
-def test_create_inference_job_without_s3_config_is_accepted(
+def test_create_inference_job_without_storage_config_is_accepted(
     client: TestClient,
     firestore_mock,
     auth_headers: dict,
 ) -> None:
-    """s3Config is optional; omitting it should still be accepted (not 422)."""
+    """Platform-managed storage means callers no longer send storage config."""
     runpod_key = auth_headers["Authorization"].split(" ", 1)[1]
     set_deployment(firestore_mock, "deployments", _ready_deployment_doc(runpod_key))
     provider = Mock()
@@ -235,12 +218,6 @@ def test_get_inference_job_estimates_cost_from_gpu_price(
             json={
                 "deployment_id": "dep_2026_ready123",
                 "input": {"prompt": "A futuristic skyline"},
-                "s3Config": {
-                    "accessId": "key-id",
-                    "accessSecret": "secret-key",
-                    "bucketName": "user-results",
-                    "endpointUrl": "https://storage.example.com",
-                },
             },
             headers=auth_headers,
         )

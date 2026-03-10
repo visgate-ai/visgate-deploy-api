@@ -51,6 +51,7 @@ def test_post_deployments_task_field_accepted(
         json={
             "hf_model_id": "black-forest-labs/FLUX.1-schnell",
             "user_runpod_key": "rpa_xxx",
+            "hf_token": "hf_user_token",
             "user_webhook_url": "https://example.com/webhook",
             "task": "text2img",
         },
@@ -76,6 +77,7 @@ def test_post_deployments_canonical_task_field_accepted(
         json={
             "hf_model_id": "black-forest-labs/FLUX.1-schnell",
             "user_runpod_key": "rpa_xxx",
+            "hf_token": "hf_user_token",
             "user_webhook_url": "https://example.com/webhook",
             "task": "text_to_image",
         },
@@ -112,6 +114,7 @@ def test_post_deployments_allows_missing_webhook(
         json={
             "hf_model_id": "black-forest-labs/FLUX.1-schnell",
             "user_runpod_key": "rpa_xxx",
+            "hf_token": "hf_user_token",
         },
         headers=auth_headers,
     )
@@ -137,6 +140,7 @@ def test_post_deployments_persists_request_base_for_internal_callbacks(
         json={
             "hf_model_id": "black-forest-labs/FLUX.1-schnell",
             "user_runpod_key": "rpa_xxx",
+            "hf_token": "hf_user_token",
         },
         headers=auth_headers,
     )
@@ -165,6 +169,7 @@ def test_post_deployments_prefers_forwarded_https_base_for_internal_callbacks(
         json={
             "hf_model_id": "black-forest-labs/FLUX.1-schnell",
             "user_runpod_key": "rpa_xxx",
+            "hf_token": "hf_user_token",
         },
         headers={
             **auth_headers,
@@ -200,31 +205,28 @@ def test_root(client: TestClient) -> None:
     assert "visgate-deploy-api" in resp.json().get("service", "")
 
 
-def test_private_fields_require_private_scope(
+def test_hf_token_is_required_for_deployments(
     client: TestClient,
     auth_headers: dict,
     deployment_create_payload: dict,
 ) -> None:
-    """Private S3 fields must not be accepted unless cache_scope=private."""
-    payload = {
-        **deployment_create_payload,
-        "cache_scope": "off",
-        "user_s3_url": "s3://example/models",
-    }
+    """Caller must provide their own HF token for licensing/accountability."""
+    payload = {**deployment_create_payload}
+    payload.pop("hf_token", None)
     resp = client.post("/v1/deployments", json=payload, headers=auth_headers)
     assert resp.status_code == 400
-    assert "cache_scope=private" in resp.json()["message"]
+    assert "hf_token is required" in resp.json()["message"]
 
 
 @patch("src.api.routes.deployments.enqueue_orchestration_task", new_callable=AsyncMock)
-def test_shared_cache_rejects_unlisted_model(
+def test_unlisted_models_can_still_deploy_when_user_supplies_hf_token(
     mock_enqueue,
     client: TestClient,
     auth_headers: dict,
     deployment_create_payload: dict,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Shared cache should reject models outside allowlist when strict mode is enabled."""
+    """Deploy requests no longer expose cache_scope; platform R2 cache stays internal."""
     monkeypatch.setenv("S3_MODEL_URL", "s3://platform-cache/models")
     monkeypatch.setenv("SHARED_CACHE_ALLOWED_MODELS", "stabilityai/sd-turbo")
     monkeypatch.setenv("SHARED_CACHE_REJECT_UNLISTED", "true")
@@ -235,11 +237,9 @@ def test_shared_cache_rejects_unlisted_model(
     payload = {
         **deployment_create_payload,
         "hf_model_id": "black-forest-labs/FLUX.1-schnell",
-        "cache_scope": "shared",
     }
     resp = client.post("/v1/deployments", json=payload, headers=auth_headers)
     get_settings.cache_clear()
 
-    assert resp.status_code == 400
-    assert "allowlisted popular models" in resp.json()["message"]
-    mock_enqueue.assert_not_called()
+    assert resp.status_code == 202
+    mock_enqueue.assert_awaited_once()

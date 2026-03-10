@@ -84,17 +84,11 @@ Submits an async inference job to a ready deployment. This keeps RunPod job orch
       "ttl_ms": 3600000,
       "low_priority": false
    },
-   "s3Config": {
-      "accessId": "AKIA...",
-      "accessSecret": "secret",
-      "bucketName": "customer-output-bucket",
-      "endpointUrl": "https://s3.example.com",
-      "keyPrefix": "visgate/jobs"
-   }
+   "input_image_url": "https://example.com/source.png"
 }
 ```
 
-`s3Config` is required for inference jobs. Output artifacts are expected to land in the caller-owned bucket, and the Deploy API stores only artifact metadata plus compact previews in Firestore.
+Inference jobs use platform-managed R2 storage. Media inputs such as `input_image_url` or `audio_url` are staged into the platform R2 input bucket before the worker starts, and outputs are written to the platform R2 output bucket. The API stores artifact metadata plus compact previews in Firestore.
 
 **Response (202):**
 ```json
@@ -249,13 +243,14 @@ See [inference/README.md](../inference/README.md) for supported models, job I/O,
    **Cloudflare R2 credentials** (for platform shared model cache):
    | GCP Secret name | Cloud Run env var | Purpose |
    |---|---|---|
-   | `VISGATE_DEPLOY_API_R2_ACCESS_KEY_ID_RW` | `VISGATE_DEPLOYAPI_R2_ACCESS_KEY_ID_RW` | R2 read-write key — API only, never sent to workers |
-   | `VISGATE_DEPLOY_API_R2_SECRET_ACCESS_KEY_RW` | `VISGATE_DEPLOYAPI_R2_SECRET_ACCESS_KEY_RW` | R2 RW secret — API only |
-   | `VISGATE_DEPLOY_API_S3_API_R2` | `VISGATE_DEPLOYAPI_R2_ENDPOINT_URL` | R2 endpoint URL |
-   | `VISGATE_DEPLOY_API_R2_ACCESS_KEY_ID_R` | `VISGATE_DEPLOYAPI_R2_ACCESS_KEY_ID_RO` | R2 read-only key — injected into RunPod workers |
-   | `VISGATE_DEPLOY_API_R2_SECRET_ACCESS_KEY_R` | `VISGATE_DEPLOYAPI_R2_SECRET_ACCESS_KEY_RO` | R2 RO secret — injected into RunPod workers |
+   | `VISGATE_DEPLOY_API_INFERENCE_R2_ACCESS_KEY_ID_OUTPUT_RW` | `VISGATE_DEPLOY_API_INFERENCE_R2_ACCESS_KEY_ID_OUTPUT_RW` | R2 read-write key — API only, never sent to workers |
+   | `VISGATE_DEPLOY_API_INFERENCE_R2_SECRET_ACCESS_KEY_OUTPUT_RW` | `VISGATE_DEPLOY_API_INFERENCE_R2_SECRET_ACCESS_KEY_OUTPUT_RW` | R2 RW secret — API only |
+   | `VISGATE_DEPLOY_API_INFERENCE_R2_ACCESS_KEY_ID_INPUT_R` | `VISGATE_DEPLOY_API_INFERENCE_R2_ACCESS_KEY_ID_INPUT_R` | R2 read-only key — injected into RunPod workers |
+   | `VISGATE_DEPLOY_API_INFERENCE_R2_SECRET_ACCESS_KEY_INPUT_R` | `VISGATE_DEPLOY_API_INFERENCE_R2_SECRET_ACCESS_KEY_INPUT_R` | R2 RO secret — injected into RunPod workers |
+   | `VISGATE_DEPLOY_API_INFERENCE_R2_BUCKET_NAME_OUTPUT` | `VISGATE_DEPLOY_API_INFERENCE_R2_BUCKET_NAME_OUTPUT` | Default output bucket name for smoke/integration flows |
+   | `VISGATE_DEPLOY_API_INFERENCE_R2_BUCKET_NAME_INPUT` | `VISGATE_DEPLOY_API_INFERENCE_R2_BUCKET_NAME_INPUT` | Input bucket identifier for platform config |
 
-   > **Note:** GCP Secret Manager names cannot be renamed. The Cloud Run env var names (left column) have been updated to be descriptive. The `AliasChoices` in `config.py` ensures old names still work for backward compatibility.
+   > **Security note:** Legacy R2 secret names are intentionally rejected at startup (fail-fast).
 
 4. **Create Cloud Tasks queue** (recommended for production — eliminates F6 scale-to-zero risk):
    ```bash

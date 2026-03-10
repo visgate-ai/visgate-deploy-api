@@ -33,39 +33,58 @@ def test_get_settings_cached() -> None:
 # ── New VISGATE_DEPLOY_API_ env var aliases ─────────────────────────────────
 
 def test_r2_rw_key_reads_from_visgate_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    """r2_access_key_id_rw and r2_secret_access_key_rw read via VISGATE_DEPLOY_API_ prefix."""
-    monkeypatch.setenv("VISGATE_DEPLOY_API_R2_ACCESS_KEY_ID_RW", "rw_key_id")
-    monkeypatch.setenv("VISGATE_DEPLOY_API_R2_SECRET_ACCESS_KEY_RW", "rw_secret")
+    """r2_access_key_id_rw and r2_secret_access_key_rw read from output RW canonical names."""
+    monkeypatch.setenv("VISGATE_DEPLOY_API_INFERENCE_R2_ACCESS_KEY_ID_OUTPUT_RW", "rw_key_id")
+    monkeypatch.setenv("VISGATE_DEPLOY_API_INFERENCE_R2_SECRET_ACCESS_KEY_OUTPUT_RW", "rw_secret")
     s = Settings()
     assert s.r2_access_key_id_rw == "rw_key_id"
     assert s.r2_secret_access_key_rw == "rw_secret"
 
 
-def test_r2_rw_key_falls_back_to_old_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Old AWS_ACCESS_KEY_ID env var still works when VISGATE_ alias is unset."""
-    monkeypatch.delenv("VISGATE_DEPLOY_API_R2_ACCESS_KEY_ID_RW", raising=False)
-    monkeypatch.delenv("VISGATE_DEPLOY_API_R2_SECRET_ACCESS_KEY_RW", raising=False)
-    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "old_key_id")
-    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "old_secret")
-    s = Settings(_env_file=None)  # skip .env file to avoid stale values
-    assert s.r2_access_key_id_rw == "old_key_id"
-    assert s.r2_secret_access_key_rw == "old_secret"
+def test_r2_rw_key_reads_from_output_aliases(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("VISGATE_DEPLOY_API_INFERENCE_R2_ACCESS_KEY_ID_OUTPUT_RW", "rw_out_key")
+    monkeypatch.setenv("VISGATE_DEPLOY_API_INFERENCE_R2_SECRET_ACCESS_KEY_OUTPUT_RW", "rw_out_secret")
+    s = Settings(_env_file=None)
+    assert s.r2_access_key_id_rw == "rw_out_key"
+    assert s.r2_secret_access_key_rw == "rw_out_secret"
+
+
+def test_r2_rw_key_no_legacy_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Legacy AWS fallback is disabled for security reasons."""
+    monkeypatch.delenv("VISGATE_DEPLOY_API_INFERENCE_R2_ACCESS_KEY_ID_OUTPUT_RW", raising=False)
+    monkeypatch.delenv("VISGATE_DEPLOY_API_INFERENCE_R2_SECRET_ACCESS_KEY_OUTPUT_RW", raising=False)
+    s = Settings(_env_file=None)
+    assert s.r2_access_key_id_rw == ""
+    assert s.r2_secret_access_key_rw == ""
 
 
 def test_r2_ro_key_reads_from_visgate_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    """r2_access_key_id_ro / r2_secret_access_key_ro read via VISGATE_DEPLOY_API_ prefix."""
-    monkeypatch.setenv("VISGATE_DEPLOY_API_R2_ACCESS_KEY_ID_R", "ro_key_id")
-    monkeypatch.setenv("VISGATE_DEPLOY_API_R2_SECRET_ACCESS_KEY_R", "ro_secret")
+    """r2_access_key_id_ro / r2_secret_access_key_ro read from input R canonical names."""
+    monkeypatch.setenv("VISGATE_DEPLOY_API_INFERENCE_R2_ACCESS_KEY_ID_INPUT_R", "ro_key_id")
+    monkeypatch.setenv("VISGATE_DEPLOY_API_INFERENCE_R2_SECRET_ACCESS_KEY_INPUT_R", "ro_secret")
     s = Settings()
     assert s.r2_access_key_id_ro == "ro_key_id"
     assert s.r2_secret_access_key_ro == "ro_secret"
 
 
-def test_hf_pro_token_reads_from_visgate_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    """hf_pro_access_token reads via VISGATE_DEPLOY_API_ prefix."""
-    monkeypatch.setenv("VISGATE_DEPLOY_API_HF_PRO_ACCESS_TOKEN", "hf_platform_token")
-    s = Settings()
-    assert s.hf_pro_access_token == "hf_platform_token"
+def test_r2_ro_key_reads_from_input_aliases(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("VISGATE_DEPLOY_API_INFERENCE_R2_ACCESS_KEY_ID_INPUT_R", "ro_in_key")
+    monkeypatch.setenv("VISGATE_DEPLOY_API_INFERENCE_R2_SECRET_ACCESS_KEY_INPUT_R", "ro_in_secret")
+    s = Settings(_env_file=None)
+    assert s.r2_access_key_id_ro == "ro_in_key"
+    assert s.r2_secret_access_key_ro == "ro_in_secret"
+
+
+def test_smoke_test_keys_and_bucket_aliases(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("VISGATE_DEPLOY_API_SMOKE_TEST_RUNPOD", "rpa_test")
+    monkeypatch.setenv("VISGATE_DEPLOY_API_SMOKE_TEST_HF_KEY", "hf_test")
+    monkeypatch.setenv("VISGATE_DEPLOY_API_INFERENCE_R2_BUCKET_NAME_OUTPUT", "bucket-output")
+    monkeypatch.setenv("VISGATE_DEPLOY_API_INFERENCE_R2_BUCKET_NAME_INPUT", "bucket-input")
+    s = Settings(_env_file=None)
+    assert s.smoke_test_runpod_api_key == "rpa_test"
+    assert s.smoke_test_hf_key == "hf_test"
+    assert s.inference_r2_bucket_name_output == "bucket-output"
+    assert s.inference_r2_bucket_name_input == "bucket-input"
 
 
 def test_s3_model_url_default(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -84,10 +103,17 @@ def test_s3_model_url_overridable(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_aws_endpoint_reads_from_visgate_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    """r2_endpoint_url reads via VISGATE_DEPLOY_API_S3_API_R2."""
-    monkeypatch.setenv("VISGATE_DEPLOY_API_S3_API_R2", "https://acct.r2.cloudflarestorage.com")
+    """r2_endpoint_url reads default endpoint when no env override is used."""
+    monkeypatch.delenv("VISGATE_DEPLOY_API_R2_ENDPOINT_URL", raising=False)
     s = Settings()
-    assert s.r2_endpoint_url == "https://acct.r2.cloudflarestorage.com"
+    assert s.r2_endpoint_url == "https://088e0d2618d33e55a76e4d65b439d6c4.r2.cloudflarestorage.com"
+
+
+def test_legacy_secret_env_names_fail_fast(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("VISGATE_DEPLOY_API_R2_ACCESS_KEY_ID_RW", "legacy")
+    with pytest.raises(ValueError, match="Legacy secret/env names are not allowed"):
+        s = Settings(_env_file=None)
+        s.resolve_secrets()
 
 
 def test_root_path_reads_from_visgate_env(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -4,6 +4,7 @@
 .env.*.local
 *.pem
 *.key
+keys
 
 # Python
 __pycache__/
@@ -43,6 +44,8 @@ Thumbs.db
 # Logs
 *.log
 logs/
+smoke-results.json
+cloudflared.log
 
 # GCP / Docker (optional)
 *.json

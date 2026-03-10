@@ -5,6 +5,7 @@ import sys
 
 API_URL = "https://visgate-deploy-api-wxup7pxrsa-ey.a.run.app"
 RUNPOD_KEY = os.environ.get("RUNPOD_API_KEY")
+HF_TOKEN = os.environ.get("HF_TOKEN")
 
 MODELS = [
     {"label": "IMAGE", "model_id": "stabilityai/sdxl-turbo", "task": "text2img"},
@@ -21,7 +22,7 @@ def run_test(cfg):
     resp = requests.post(f"{API_URL}/v1/deployments", json={
         "hf_model_id": cfg["model_id"],
         "task": cfg["task"],
-        "cache_scope": "shared" # Request R2 cached mode
+        "hf_token": HF_TOKEN,
     }, headers=headers)
     
     if resp.status_code != 202:

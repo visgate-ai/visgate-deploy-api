@@ -243,48 +243,8 @@ async def create_deployment(
     runpod_api_key = _resolve_runpod_key(body, ctx)
     if not runpod_api_key:
         raise InvalidDeploymentRequestError("Missing Runpod API key (Authorization header or user_runpod_key)")
-
-    cache_scope = (body.cache_scope or "off").lower()
-    if cache_scope not in {"off", "shared", "private"}:
-        raise InvalidDeploymentRequestError("cache_scope must be one of: off, shared, private")
-
-    private_fields_present = any(
-        [
-            body.user_s3_url,
-            body.user_aws_access_key_id,
-            body.user_aws_secret_access_key,
-            body.user_aws_endpoint_url,
-        ],
-    )
-    if cache_scope != "private" and private_fields_present:
-        raise InvalidDeploymentRequestError(
-            "user_s3_url and user_aws_* fields require cache_scope=private",
-        )
-
-    private_s3_url = None
-    private_access_key = None
-    private_secret_key = None
-    private_endpoint = None
-
-    if cache_scope == "shared":
-        if not settings.shared_cache_enabled:
-            raise InvalidDeploymentRequestError("shared cache is disabled on this service")
-        if not settings.r2_model_base_url:
-            raise InvalidDeploymentRequestError("shared cache requires R2_MODEL_BASE_URL configured on service")
-        allowlisted_models = _parse_csv_set(settings.shared_cache_allowed_models)
-        if settings.shared_cache_reject_unlisted and allowlisted_models and hf_model_id not in allowlisted_models:
-            raise InvalidDeploymentRequestError(
-                "shared cache supports only allowlisted popular models; use cache_scope=off or private",
-            )
-    if cache_scope == "private":
-        if not body.user_s3_url:
-            raise InvalidDeploymentRequestError("private cache requires user_s3_url")
-        if not body.user_aws_access_key_id or not body.user_aws_secret_access_key:
-            raise InvalidDeploymentRequestError("private cache requires user_aws_access_key_id and user_aws_secret_access_key")
-        private_s3_url = body.user_s3_url
-        private_access_key = body.user_aws_access_key_id
-        private_secret_key = body.user_aws_secret_access_key
-        private_endpoint = body.user_aws_endpoint_url
+    if not body.hf_token:
+        raise InvalidDeploymentRequestError("hf_token is required and must belong to the caller")
 
     pool_policy = choose_pool_policy(hf_model_id)
     provider = get_provider("runpod")
@@ -385,31 +345,15 @@ async def create_deployment(
     )
     set_deployment(firestore_client, settings.firestore_collection_deployments, doc)
 
-    model_path = model_slug(hf_model_id)
-    s3_model_url = None
-    # For cache_scope=shared: do NOT pre-build s3_model_url here.
-    # orchestrate_deployment will query the R2 manifest and set computed_s3_model_url
-    # on a cache hit, or enqueue the cache_model background task on a miss.
-    if cache_scope == "private" and private_s3_url:
-        s3_model_url = _build_s3_model_url(private_s3_url, f"{ctx.user_hash}/{model_path}")
-
     store_secrets(
         deployment_id,
         runpod_api_key,
         body.hf_token,
-        aws_access_key_id=private_access_key,
-        aws_secret_access_key=private_secret_key,
-        aws_endpoint_url=private_endpoint,
-        s3_model_url=s3_model_url,
     )
     await enqueue_orchestration_task(
         deployment_id,
         runpod_api_key,
         body.hf_token,
-        private_access_key,
-        private_secret_key,
-        private_endpoint,
-        s3_model_url,
     )
     record_deployment_created()
 

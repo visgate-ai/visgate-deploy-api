@@ -11,10 +11,6 @@ from threading import Lock
 class CachedSecrets:
     runpod_api_key: str
     hf_token: str | None
-    aws_access_key_id: str | None
-    aws_secret_access_key: str | None
-    aws_endpoint_url: str | None
-    s3_model_url: str | None
     expires_at: float
 
 
@@ -27,10 +23,6 @@ def store_secrets(
     deployment_id: str,
     runpod_api_key: str,
     hf_token: str | None,
-    aws_access_key_id: str | None = None,
-    aws_secret_access_key: str | None = None,
-    aws_endpoint_url: str | None = None,
-    s3_model_url: str | None = None,
     ttl_seconds: float = _DEFAULT_TTL_SECONDS,
 ) -> None:
     """Store secrets in memory for best-effort background tasks."""
@@ -39,10 +31,6 @@ def store_secrets(
         _cache[deployment_id] = CachedSecrets(
             runpod_api_key=runpod_api_key,
             hf_token=hf_token,
-            aws_access_key_id=aws_access_key_id,
-            aws_secret_access_key=aws_secret_access_key,
-            aws_endpoint_url=aws_endpoint_url,
-            s3_model_url=s3_model_url,
             expires_at=expires_at,
         )
 

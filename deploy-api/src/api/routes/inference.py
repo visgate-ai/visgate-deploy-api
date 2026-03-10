@@ -31,10 +31,14 @@ from src.services.inference_jobs import (
     now_iso,
     parse_iso,
     resolve_gpu_hourly_price,
-    sanitize_s3_config,
 )
 from src.services.internal_urls import build_inference_job_callback_url, resolve_internal_base_url
 from src.services.model_capabilities import supports_task
+from src.services.platform_r2 import (
+    build_platform_output_s3_config,
+    sanitize_platform_output_destination,
+    stage_input_payload_to_r2,
+)
 from src.services.provider_factory import get_provider
 
 router = APIRouter(prefix="/v1/inference/jobs", tags=["inference"])
@@ -183,6 +187,9 @@ async def create_inference_job(
     internal_webhook_url = _build_internal_job_webhook(job_id, request)
     provider_webhook = internal_webhook_url or (str(body.user_webhook_url) if body.user_webhook_url else None)
     created_at = now_iso()
+    staged_input, staged_artifacts = stage_input_payload_to_r2(settings, job_id, body.input)
+    platform_s3_config = build_platform_output_s3_config(settings, deployment.deployment_id, job_id)
+    output_destination = sanitize_platform_output_destination(settings, deployment.deployment_id, job_id)
     gpu_price_per_hour_usd = None
     if deployment.gpu_allocated:
         try:
@@ -193,12 +200,11 @@ async def create_inference_job(
     accepted = await provider.submit_job(
         deployment.endpoint_url,
         ctx.runpod_api_key,
-        body.input,
+        staged_input,
         webhook_url=provider_webhook,
         policy=body.policy.model_dump(exclude_none=True) if body.policy else None,
-        s3_config=body.s3_config.model_dump(exclude_none=True) if body.s3_config else {},
+        s3_config=platform_s3_config,
     )
-    output_destination = sanitize_s3_config(body.s3_config.model_dump(exclude_none=True) if body.s3_config else {})
 
     doc = InferenceJobDoc(
         job_id=job_id,
@@ -212,7 +218,7 @@ async def create_inference_job(
         gpu_price_per_hour_usd=gpu_price_per_hour_usd,
         hf_model_id=deployment.hf_model_id,
         task=task,
-        input_payload=body.input,
+        input_payload={**staged_input, "staged_inputs": staged_artifacts} if staged_artifacts else staged_input,
         output_destination=output_destination,
         created_at=created_at,
         updated_at=created_at,

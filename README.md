@@ -148,22 +148,15 @@ Default GPU registry (cheapest → most expensive):
 Cold starts are the main latency cost. With a persistent volume + S3 cache, the _second_ cold start loads from disk in 2–5s instead of 40–80s.
 
 ```bash
-# Private cache: your own S3/R2/MinIO bucket
 POST /v1/deployments
 {
   "hf_model_id": "...",
-  "cache_scope": "private",
-  "user_s3_url": "s3://my-bucket/models/sd-turbo",
-  "user_aws_access_key_id": "...",
-  "user_aws_secret_access_key": "...",
-  "user_aws_endpoint_url": "https://..."   # for R2 / MinIO
-}
-
-# Shared cache: platform-managed (read-only for users, allowlist-only)
-{
-  "cache_scope": "shared"
+  "hf_token": "hf_your_token",
+  "task": "text_to_image"
 }
 ```
+
+Model cache and inference media storage are platform-managed in R2. Callers no longer send `cache_scope` or bucket credentials.
 
 Cache sync uses [s5cmd](https://github.com/peak/s5cmd) (50 workers, 50 MB chunks) for fast parallel downloads.
 

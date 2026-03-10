@@ -121,10 +121,8 @@ def test_list_models_no_r2(client: TestClient) -> None:
 
 def test_list_models_with_r2_cache(client: TestClient, monkeypatch) -> None:
     """GET /v1/models marks cached=True for models in R2 manifest."""
-    monkeypatch.setenv("VISGATE_DEPLOYAPI_R2_ACCESS_KEY_ID_RO", "rtest")
-    monkeypatch.setenv("VISGATE_DEPLOYAPI_R2_SECRET_ACCESS_KEY_RO", "rsecret")
-    monkeypatch.setenv("VISGATE_DEPLOYAPI_R2_ENDPOINT_URL", "https://r2.example.com")
-
+    monkeypatch.setenv("VISGATE_DEPLOY_API_INFERENCE_R2_ACCESS_KEY_ID_INPUT_R", "rtest")
+    monkeypatch.setenv("VISGATE_DEPLOY_API_INFERENCE_R2_SECRET_ACCESS_KEY_INPUT_R", "rsecret")
     cached_id = "black-forest-labs/FLUX.1-schnell"
 
     with patch("src.api.routes.models.fetch_cached_model_ids") as mock_r2:

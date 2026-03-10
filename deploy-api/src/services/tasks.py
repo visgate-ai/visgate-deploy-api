@@ -6,12 +6,60 @@ import json
 import time
 from typing import Any
 
+import google.auth
 from google.api_core.exceptions import AlreadyExists
 from google.cloud import tasks_v2
 
 from src.core.config import get_settings
 from src.core.logging import structured_log
 from src.services.deployment import orchestrate_deployment
+
+
+def _runtime_service_account_email() -> str | None:
+    """Best-effort resolution of the current ADC service account email."""
+    try:
+        credentials, _ = google.auth.default()
+    except Exception:
+        return None
+    email = getattr(credentials, "service_account_email", None)
+    if not isinstance(email, str) or "@" not in email:
+        return None
+    return email
+
+
+def _grant_secret_accessor_bindings(client: Any, secret_path: str) -> None:
+    """Grant secret accessor on ephemeral task secrets to service accounts that need it."""
+    settings = get_settings()
+    service_accounts = {
+        sa
+        for sa in (
+            _runtime_service_account_email(),
+            settings.cloud_tasks_service_account,
+        )
+        if sa
+    }
+    if not service_accounts:
+        return
+
+    role = "roles/secretmanager.secretAccessor"
+    policy = client.get_iam_policy(request={"resource": secret_path})
+    binding = next((item for item in policy.bindings if item.role == role), None)
+    changed = False
+
+    if binding is None:
+        binding = policy.bindings.add()
+        binding.role = role
+        changed = True
+
+    existing_members = set(binding.members)
+    for service_account in sorted(service_accounts):
+        member = f"serviceAccount:{service_account}"
+        if member not in existing_members:
+            binding.members.append(member)
+            changed = True
+
+    if changed:
+        client.set_iam_policy(request={"resource": secret_path, "policy": policy})
 
 
 def _store_task_secrets(deployment_id: str, project_id: str, secrets: dict[str, Any]) -> str:
@@ -41,6 +89,7 @@ def _store_task_secrets(deployment_id: str, project_id: str, secrets: dict[str, 
         pass
 
     secret_path = f"{parent}/secrets/{secret_id}"
+    _grant_secret_accessor_bindings(client, secret_path)
     client.add_secret_version(
         request={"parent": secret_path, "payload": {"data": json.dumps(secrets).encode()}}
     )
@@ -60,10 +109,6 @@ async def enqueue_orchestration_task(
     deployment_id: str,
     runpod_api_key: str,
     hf_token: str | None,
-    aws_access_key_id: str | None = None,
-    aws_secret_access_key: str | None = None,
-    aws_endpoint_url: str | None = None,
-    s3_model_url: str | None = None,
 ) -> None:
     """
     Enqueue a task to orchestrate deployment.
@@ -96,10 +141,6 @@ async def enqueue_orchestration_task(
                 deployment_id,
                 runpod_api_key,
                 hf_token,
-                aws_access_key_id,
-                aws_secret_access_key,
-                aws_endpoint_url,
-                s3_model_url,
             )
         )
         return
@@ -117,27 +158,37 @@ async def enqueue_orchestration_task(
                 deployment_id,
                 runpod_api_key,
                 hf_token,
-                aws_access_key_id,
-                aws_secret_access_key,
-                aws_endpoint_url,
-                s3_model_url,
             )
         )
         return
 
-    # Store credentials in Secret Manager. Task body will reference the secret by name only.
-    secret_ref = _store_task_secrets(
-        deployment_id,
-        settings.gcp_project_id,
-        {
-            "runpod_api_key": runpod_api_key,
-            "hf_token": hf_token,
-            "aws_access_key_id": aws_access_key_id,
-            "aws_secret_access_key": aws_secret_access_key,
-            "aws_endpoint_url": aws_endpoint_url,
-            "s3_model_url": s3_model_url,
-        },
-    )
+    # Store credentials in Secret Manager. If the runtime lacks IAM mutation rights
+    # for ephemeral secrets, fall back to in-process orchestration instead of failing
+    # the user-facing deployment create request.
+    try:
+        secret_ref = _store_task_secrets(
+            deployment_id,
+            settings.gcp_project_id,
+            {
+                "runpod_api_key": runpod_api_key,
+                "hf_token": hf_token,
+            },
+        )
+    except Exception as e:
+        structured_log(
+            "ERROR",
+            f"Failed to prepare task secrets: {e}; falling back to in-process orchestration",
+            deployment_id=deployment_id,
+            error={"message": str(e)},
+        )
+        asyncio.create_task(
+            orchestrate_deployment(
+                deployment_id,
+                runpod_api_key,
+                hf_token,
+            )
+        )
+        return
 
     url = f"{base_url}/internal/tasks/orchestrate-deployment"
     # No credentials in the body — only the deployment_id and Secret Manager reference.
@@ -182,10 +233,6 @@ async def enqueue_orchestration_task(
                 deployment_id,
                 runpod_api_key,
                 hf_token,
-                aws_access_key_id,
-                aws_secret_access_key,
-                aws_endpoint_url,
-                s3_model_url,
             )
         )
 

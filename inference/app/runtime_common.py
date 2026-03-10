@@ -73,6 +73,52 @@ def job_s3_config(job: dict[str, Any], job_input: dict[str, Any]) -> dict[str, A
     return raw
 
 
+def _worker_r2_credentials() -> tuple[str, str, str]:
+    return (
+        os.environ.get("VISGATE_R2_ACCESS_KEY_ID") or os.environ.get("AWS_ACCESS_KEY_ID", ""),
+        os.environ.get("VISGATE_R2_SECRET_ACCESS_KEY") or os.environ.get("AWS_SECRET_ACCESS_KEY", ""),
+        os.environ.get("VISGATE_R2_ENDPOINT_URL") or os.environ.get("AWS_ENDPOINT_URL", ""),
+    )
+
+
+def download_r2_artifact_to_tempfile(artifact: dict[str, Any], suffix: str) -> str:
+    bucket_name = artifact.get("bucket_name")
+    object_key = artifact.get("key")
+    if not bucket_name or not object_key:
+        raise ValueError("R2 input artifact is missing bucket_name or key")
+    access_key, secret_key, endpoint_url = _worker_r2_credentials()
+    if not access_key or not secret_key or not endpoint_url:
+        raise ValueError("Worker R2 credentials are not configured")
+
+    tmp_path = ""
+    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+        tmp_path = tmp.name
+    try:
+        env = os.environ.copy()
+        env["AWS_ACCESS_KEY_ID"] = access_key
+        env["AWS_SECRET_ACCESS_KEY"] = secret_key
+        env["AWS_REGION"] = "auto"
+        subprocess.run(
+            [
+                "s5cmd",
+                "--endpoint-url",
+                endpoint_url,
+                "cp",
+                f"s3://{bucket_name}/{object_key}",
+                tmp_path,
+            ],
+            check=True,
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        return tmp_path
+    except Exception:
+        if tmp_path and os.path.exists(tmp_path):
+            os.remove(tmp_path)
+        raise
+
+
 def artifact_target(
     s3_config: dict[str, Any] | None,
     *,
@@ -91,6 +137,25 @@ def artifact_target(
     return upload_target, bucket_name, endpoint_url, object_key, object_url
 
 
+def _upload_with_boto3(
+    tmp_path: str,
+    s3_config: dict[str, Any],
+    bucket_name: str,
+    object_key: str,
+    content_type: str,
+) -> None:
+    import boto3
+
+    client = boto3.client(
+        "s3",
+        endpoint_url=s3_config.get("endpointUrl"),
+        aws_access_key_id=s3_config.get("accessId", ""),
+        aws_secret_access_key=s3_config.get("accessSecret", ""),
+        region_name="auto",
+    )
+    client.upload_file(tmp_path, bucket_name, object_key, ExtraArgs={"ContentType": content_type})
+
+
 def upload_bytes(
     data: bytes,
     job: dict[str, Any],
@@ -105,12 +170,6 @@ def upload_bytes(
         extension=extension,
     )
     if not upload_target:
-        return None
-    try:
-        res = subprocess.run(["s5cmd", "version"], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        print(f"s5cmd version check: {res.stdout.decode().strip()}")
-    except Exception as e:
-        print(f"s5cmd search failed: {e}")
         return None
 
     tmp_path = ""
@@ -127,9 +186,16 @@ def upload_bytes(
             if s3_config.get("endpointUrl"):
                 cmd.extend(["--endpoint-url", s3_config["endpointUrl"]])
         cmd.extend(["cp", tmp_path, upload_target])
-        print(f"Executing: {' '.join(cmd)} to {upload_target}")
-        res = subprocess.run(cmd, check=True, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        print(f"s5cmd success: {res.stdout.decode().strip()}")
+        try:
+            subprocess.run(["s5cmd", "version"], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            subprocess.run(cmd, check=True, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        except Exception as exc:
+            log_tunnel("WARNING", f"s5cmd upload failed, retrying with boto3: {exc}")
+            print(f"s5cmd upload failed, retrying with boto3: {exc}")
+            if not bucket_name or not object_key or not s3_config:
+                raise
+            _upload_with_boto3(tmp_path, s3_config, bucket_name, object_key, content_type)
+
         url = object_url or upload_target
         if CDN_BASE_URL and object_key:
             url = f"{CDN_BASE_URL.rstrip('/')}/{object_key}"
@@ -141,7 +207,9 @@ def upload_bytes(
             "content_type": content_type,
             "bytes": len(data),
         }
-    except Exception:
+    except Exception as exc:
+        log_tunnel("ERROR", f"Artifact upload failed: {exc}")
+        print(f"Artifact upload failed: {exc}")
         return None
     finally:
         try:

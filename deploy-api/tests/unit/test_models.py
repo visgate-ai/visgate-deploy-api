@@ -112,13 +112,13 @@ def test_deployment_create_webhook_optional() -> None:
     assert body.user_webhook_url is None
 
 
-def test_inference_job_create_s3_config_is_optional() -> None:
-    """s3Config is optional — omitting it should produce a valid object."""
+def test_inference_job_create_uses_platform_managed_storage() -> None:
+    """Inference jobs no longer accept caller-owned storage config."""
     job = InferenceJobCreate(
         deployment_id="dep_2026_ready123",
         input={"prompt": "test"},
     )
-    assert job.s3_config is None
+    assert job.input == {"prompt": "test"}
 
 
 def test_log_entry_roundtrip() -> None:

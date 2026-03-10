@@ -1,5 +1,6 @@
 """Application settings loaded from environment with validation."""
 
+import os
 from functools import lru_cache
 from typing import Literal
 
@@ -7,6 +8,28 @@ from pydantic import AliasChoices, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 LogLevel = Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
+
+# Legacy secret/env names are explicitly forbidden to prevent accidental fallback
+# to historical credentials. Service startup will fail if any of these are set.
+LEGACY_SECRET_ENV_NAMES = {
+    "VISGATE_DEPLOYAPI_R2_ACCESS_KEY_ID_RW",
+    "VISGATE_DEPLOYAPI_R2_SECRET_ACCESS_KEY_RW",
+    "VISGATE_DEPLOYAPI_R2_ENDPOINT_URL",
+    "VISGATE_DEPLOYAPI_R2_ACCESS_KEY_ID_RO",
+    "VISGATE_DEPLOYAPI_R2_SECRET_ACCESS_KEY_RO",
+    "VISGATE_DEPLOY_API_R2_ACCESS_KEY_ID_RW",
+    "VISGATE_DEPLOY_API_R2_SECRET_ACCESS_KEY_RW",
+    "VISGATE_DEPLOY_API_R2_ACCESS_KEY_ID_R",
+    "VISGATE_DEPLOY_API_R2_SECRET_ACCESS_KEY_R",
+    "VISGATE_DEPLOY_API_R2_ACCESS_KEY_ID_RO",
+    "VISGATE_DEPLOY_API_R2_SECRET_ACCESS_KEY_RO",
+    "VISGATE_DEPLOY_API_S3_API_R2",
+    "VISGATE_DEPLOY_API_R2_ENDPOINT_URL",
+    "VISGATE_DEPLOY_API_INFERENCE_R2_BUCKET_NAME",
+    "AWS_ACCESS_KEY_ID",
+    "AWS_SECRET_ACCESS_KEY",
+    "AWS_ENDPOINT_URL",
+}
 
 
 class Settings(BaseSettings):
@@ -220,11 +243,22 @@ class Settings(BaseSettings):
         description="Base URL of this service for container callback (e.g. https://orch-xxx.run.app)",
     )
 
-    # Platform HF token (used when user does not supply their own hf_token)
-    hf_pro_access_token: str = Field(
+    # Smoke-test credentials
+    smoke_test_runpod_api_key: str = Field(
         default="",
-        validation_alias=AliasChoices("visgate_deploy_api_hf_pro_access_token", "hf_pro_access_token"),
-        description="Platform HF Pro token — auto-injected for gated models when caller omits hf_token",
+        validation_alias=AliasChoices(
+            "visgate_deploy_api_smoke_test_runpod",
+            "smoke_test_runpod_api_key",
+        ),
+        description="Optional RunPod API key used by live smoke-test automation.",
+    )
+    smoke_test_hf_key: str = Field(
+        default="",
+        validation_alias=AliasChoices(
+            "visgate_deploy_api_smoke_test_hf_key",
+            "smoke_test_hf_key",
+        ),
+        description="Optional Hugging Face token used by smoke tests for gated models.",
     )
 
     # ── Cloudflare R2 — Read/Write key ────────────────────────────────────────
@@ -233,29 +267,19 @@ class Settings(BaseSettings):
     r2_access_key_id_rw: str = Field(
         default="",
         validation_alias=AliasChoices(
-            "visgate_deployapi_r2_access_key_id_rw",   # new canonical name
-            "visgate_deploy_api_r2_access_key_id_rw",  # GCP secret name (legacy)
-            "aws_access_key_id",                        # backward compat
+            "visgate_deploy_api_inference_r2_access_key_id_output_rw",
         ),
-        description="Cloudflare R2 RW Access Key ID — Deploy API only. Never sent to RunPod workers.",
+        description="Cloudflare R2 RW Access Key ID (output RW) — Deploy API only.",
     )
     r2_secret_access_key_rw: str = Field(
         default="",
         validation_alias=AliasChoices(
-            "visgate_deployapi_r2_secret_access_key_rw",
-            "visgate_deploy_api_r2_secret_access_key_rw",
-            "aws_secret_access_key",
+            "visgate_deploy_api_inference_r2_secret_access_key_output_rw",
         ),
-        description="Cloudflare R2 RW Secret Access Key — Deploy API only.",
+        description="Cloudflare R2 RW Secret Access Key (output RW) — Deploy API only.",
     )
     r2_endpoint_url: str = Field(
-        default="",
-        validation_alias=AliasChoices(
-            "visgate_deployapi_r2_endpoint_url",
-            "visgate_deploy_api_r2_endpoint_url",
-            "visgate_deploy_api_s3_api_r2",  # GCP secret name (legacy)
-            "aws_endpoint_url",
-        ),
+        default="https://088e0d2618d33e55a76e4d65b439d6c4.r2.cloudflarestorage.com",
         description="Cloudflare R2 endpoint URL — e.g. https://ACCOUNT.r2.cloudflarestorage.com",
     )
     r2_model_base_url: str = Field(
@@ -274,22 +298,30 @@ class Settings(BaseSettings):
     r2_access_key_id_ro: str = Field(
         default="",
         validation_alias=AliasChoices(
-            "visgate_deployapi_r2_access_key_id_ro",
-            "visgate_deploy_api_r2_access_key_id_ro",
-            "visgate_deploy_api_r2_access_key_id_r",  # GCP secret name (legacy)
-            "r2_access_key_id_r",
+            "visgate_deploy_api_inference_r2_access_key_id_input_r",
         ),
-        description="Cloudflare R2 read-only Access Key ID — injected into RunPod workers for shared cache reads.",
+        description="Cloudflare R2 read-only Access Key ID (input R) — injected into RunPod workers.",
     )
     r2_secret_access_key_ro: str = Field(
         default="",
         validation_alias=AliasChoices(
-            "visgate_deployapi_r2_secret_access_key_ro",
-            "visgate_deploy_api_r2_secret_access_key_ro",
-            "visgate_deploy_api_r2_secret_access_key_r",
-            "r2_secret_access_key_r",
+            "visgate_deploy_api_inference_r2_secret_access_key_input_r",
         ),
-        description="Cloudflare R2 read-only Secret Access Key — injected into RunPod workers.",
+        description="Cloudflare R2 read-only Secret Access Key (input R) — injected into RunPod workers.",
+    )
+    inference_r2_bucket_name_output: str = Field(
+        default="",
+        validation_alias=AliasChoices(
+            "visgate_deploy_api_inference_r2_bucket_name_output",
+        ),
+        description="Optional default output bucket name for inference smoke tests.",
+    )
+    inference_r2_bucket_name_input: str = Field(
+        default="",
+        validation_alias=AliasChoices(
+            "visgate_deploy_api_inference_r2_bucket_name_input",
+        ),
+        description="Optional input bucket name identifier for platform configuration.",
     )
 
     shared_cache_enabled: bool = Field(
@@ -383,6 +415,13 @@ class Settings(BaseSettings):
 
     def resolve_secrets(self) -> None:
         """Resolve Secret Manager references for sensitive settings."""
+        legacy_present = sorted(name for name in LEGACY_SECRET_ENV_NAMES if os.getenv(name))
+        if legacy_present:
+            raise ValueError(
+                "Legacy secret/env names are not allowed. Remove these keys and use canonical names only: "
+                + ", ".join(legacy_present)
+            )
+
         def _resolve(value: str) -> str:
             if not value:
                 return value
@@ -407,11 +446,14 @@ class Settings(BaseSettings):
         self.runpod_template_id_audio = _resolve(self.runpod_template_id_audio)
         self.runpod_template_id_video = _resolve(self.runpod_template_id_video)
         self.internal_webhook_secret = _resolve(self.internal_webhook_secret)
-        self.hf_pro_access_token = _resolve(self.hf_pro_access_token)
+        self.smoke_test_runpod_api_key = _resolve(self.smoke_test_runpod_api_key)
+        self.smoke_test_hf_key = _resolve(self.smoke_test_hf_key)
         self.r2_access_key_id_rw = _resolve(self.r2_access_key_id_rw)
         self.r2_secret_access_key_rw = _resolve(self.r2_secret_access_key_rw)
         self.r2_access_key_id_ro = _resolve(self.r2_access_key_id_ro)
         self.r2_secret_access_key_ro = _resolve(self.r2_secret_access_key_ro)
+        self.inference_r2_bucket_name_output = _resolve(self.inference_r2_bucket_name_output)
+        self.inference_r2_bucket_name_input = _resolve(self.inference_r2_bucket_name_input)
 
 
 @lru_cache

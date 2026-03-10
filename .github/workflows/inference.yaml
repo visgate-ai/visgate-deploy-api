@@ -11,6 +11,27 @@ on:
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: image
+            dockerfile: ./inference/Dockerfile
+            tags: |
+              visgateai/inference-image:latest
+              visgateai/inference-image:${{ github.sha }}
+              visgateai/inference:latest
+              visgateai/inference:${{ github.sha }}
+          - name: audio
+            dockerfile: ./inference/Dockerfile.audio
+            tags: |
+              visgateai/inference-audio:latest
+              visgateai/inference-audio:${{ github.sha }}
+          - name: video
+            dockerfile: ./inference/Dockerfile.video
+            tags: |
+              visgateai/inference-video:latest
+              visgateai/inference-video:${{ github.sha }}
     permissions:
       contents: read
       packages: write
@@ -52,9 +73,9 @@ jobs:
         uses: docker/build-push-action@v5
         with:
           context: ./inference
-          file: ./inference/Dockerfile
+          file: ${{ matrix.dockerfile }}
           push: true
-          tags: visgateai/inference:latest
+          tags: ${{ matrix.tags }}
 
       - name: Skip Docker push (credentials missing)
         if: steps.dockerhub.outputs.enabled != 'true'

@@ -17,9 +17,24 @@ os.environ.setdefault("GCP_PROJECT_ID", "visgate")
 
 def _make_sm_client_mock():
     """Return a mock secretmanager.SecretManagerServiceClient."""
+    class _Binding:
+        def __init__(self):
+            self.role = ""
+            self.members = []
+
+    class _Bindings(list):
+        def add(self):
+            binding = _Binding()
+            self.append(binding)
+            return binding
+
     client = MagicMock()
     client.create_secret.return_value = MagicMock(name="projects/visgate/secrets/visgate-dep-DEP1")
     client.add_secret_version.return_value = MagicMock()
+    policy = MagicMock()
+    policy.bindings = _Bindings()
+    client.get_iam_policy.return_value = policy
+    client.set_iam_policy.return_value = MagicMock()
     mock_response = MagicMock()
     mock_response.payload.data = json.dumps({"runpod_api_key": "rpa_test", "hf_token": None}).encode()
     client.access_secret_version.return_value = mock_response
@@ -31,8 +46,9 @@ def _make_sm_client_mock():
 # _store_task_secrets
 # ---------------------------------------------------------------------------
 
+@patch("src.services.tasks._runtime_service_account_email", return_value="runtime@visgate.iam.gserviceaccount.com")
 @patch("google.cloud.secretmanager.SecretManagerServiceClient")
-def test_store_task_secrets_creates_secret_and_version(mock_sm_cls):
+def test_store_task_secrets_creates_secret_and_version(mock_sm_cls, _mock_runtime_sa):
     """_store_task_secrets creates SM secret + version; returns secret name."""
     mock_client = _make_sm_client_mock()
     mock_sm_cls.return_value = mock_client
@@ -50,6 +66,7 @@ def test_store_task_secrets_creates_secret_and_version(mock_sm_cls):
     # create_secret must be called with the correct secret_id
     create_args = mock_client.create_secret.call_args[1]["request"]
     assert create_args["secret_id"] == "visgate-dep-DEP1"
+    mock_client.set_iam_policy.assert_called_once()
     # add_secret_version must be called with the correct payload
     version_args = mock_client.add_secret_version.call_args[1]["request"]
     stored = json.loads(version_args["payload"]["data"].decode())
@@ -57,8 +74,9 @@ def test_store_task_secrets_creates_secret_and_version(mock_sm_cls):
     assert stored["hf_token"] == "hf_tok"
 
 
+@patch("src.services.tasks._runtime_service_account_email", return_value="runtime@visgate.iam.gserviceaccount.com")
 @patch("google.cloud.secretmanager.SecretManagerServiceClient")
-def test_store_task_secrets_continues_if_secret_exists(mock_sm_cls):
+def test_store_task_secrets_continues_if_secret_exists(mock_sm_cls, _mock_runtime_sa):
     """_store_task_secrets silently ignores AlreadyExists on create_secret."""
     mock_client = _make_sm_client_mock()
     mock_client.create_secret.side_effect = Exception("Already exists")
@@ -119,23 +137,19 @@ async def test_enqueue_cloud_tasks_hides_credentials(mock_orch, mock_tasks_cls, 
     mock_client.create_task.return_value = MagicMock(name="projects/visgate/.../tasks/t1")
     mock_tasks_cls.return_value = mock_client
 
-    await tasks_mod.enqueue_orchestration_task(
-        "DEP_CT", "rpa_secret_key", "hf_tok",
-        "aws_key", "aws_secret", None, None,
-    )
+    await tasks_mod.enqueue_orchestration_task("DEP_CT", "rpa_secret_key", "hf_tok")
 
     # 1. Secrets stored in SM
     mock_store.assert_called_once()
     stored = mock_store.call_args[0][2]
     assert stored["runpod_api_key"] == "rpa_secret_key"
-    assert stored["aws_access_key_id"] == "aws_key"
+    assert stored["hf_token"] == "hf_tok"
 
     # 2. Task body has no credentials
     task_arg = mock_client.create_task.call_args[1]["request"]["task"]
     body = json.loads(task_arg["http_request"]["body"])
     assert "runpod_api_key" not in body
     assert "hf_token" not in body
-    assert "aws_access_key_id" not in body
     assert body["deployment_id"] == "DEP_CT"
     assert body["secret_ref"] == "visgate-dep-DEP_CT"
 
@@ -204,7 +218,7 @@ async def test_enqueue_cache_model_task_uses_deduped_task_name(mock_tasks_cls, m
 
     monkeypatch.setenv("CLOUD_TASKS_QUEUE_PATH", "projects/visgate/locations/us-central1/queues/q")
     monkeypatch.setenv("INTERNAL_WEBHOOK_BASE_URL", "https://service.run.app")
-    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "rw_key")
+    monkeypatch.setenv("VISGATE_DEPLOY_API_INFERENCE_R2_ACCESS_KEY_ID_OUTPUT_RW", "rw_key")
     get_settings.cache_clear()
 
     mock_client = MagicMock()
@@ -233,7 +247,7 @@ async def test_enqueue_cache_model_task_ignores_already_exists(mock_tasks_cls, m
 
     monkeypatch.setenv("CLOUD_TASKS_QUEUE_PATH", "projects/visgate/locations/us-central1/queues/q")
     monkeypatch.setenv("INTERNAL_WEBHOOK_BASE_URL", "https://service.run.app")
-    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "rw_key")
+    monkeypatch.setenv("VISGATE_DEPLOY_API_INFERENCE_R2_ACCESS_KEY_ID_OUTPUT_RW", "rw_key")
     get_settings.cache_clear()
 
     mock_client = MagicMock()

@@ -2,9 +2,8 @@
 
 Covers:
 - R2 RO key sent to workers (RW key is NOT sent)
-- HF platform token auto-injected when caller omits hf_token
+- caller HF token requirement and injection
 - RUNPOD_API_KEY env var present in worker env for self-cleanup
-- User private keys override platform R2 keys
 """
 from __future__ import annotations
 
@@ -53,7 +52,7 @@ def _apply_base_patches(stack: ExitStack, provider_mock):
     stack.enter_context(patch("src.services.deployment.get_gpu_registry", return_value=[]))
     stack.enter_context(patch("src.services.deployment.get_tier_mapping", return_value={}))
     stack.enter_context(patch("src.services.deployment.select_gpu_candidates", return_value=[("GPU_A40", "A40")]))
-    stack.enter_context(patch("src.services.db.get_firestore_client", return_value=MagicMock()))
+    stack.enter_context(patch("src.services.deployment.get_firestore_client", return_value=MagicMock()))
     stack.enter_context(patch("src.services.deployment.validate_model", new_callable=AsyncMock, return_value=_make_model_info()))
     stack.enter_context(patch("src.services.deployment.append_log"))
     stack.enter_context(patch("src.services.deployment.notify", new_callable=AsyncMock, return_value=True))
@@ -89,11 +88,10 @@ async def test_worker_gets_r2_ro_key_not_rw(monkeypatch):
     """When shared cache is used, worker env gets RO key, never the RW API key."""
     from src.core.config import get_settings
     get_settings.cache_clear()
-    monkeypatch.setenv("VISGATE_DEPLOY_API_R2_ACCESS_KEY_ID_RW", "rw_key_SHOULD_NOT_BE_IN_WORKER")
-    monkeypatch.setenv("VISGATE_DEPLOY_API_R2_SECRET_ACCESS_KEY_RW", "rw_secret_SHOULD_NOT_BE_IN_WORKER")
-    monkeypatch.setenv("VISGATE_DEPLOY_API_R2_ACCESS_KEY_ID_R", "ro_key_EXPECTED")
-    monkeypatch.setenv("VISGATE_DEPLOY_API_R2_SECRET_ACCESS_KEY_R", "ro_secret_EXPECTED")
-    monkeypatch.setenv("VISGATE_DEPLOY_API_S3_API_R2", "https://acct.r2.cloudflarestorage.com")
+    monkeypatch.setenv("VISGATE_DEPLOY_API_INFERENCE_R2_ACCESS_KEY_ID_OUTPUT_RW", "rw_key_SHOULD_NOT_BE_IN_WORKER")
+    monkeypatch.setenv("VISGATE_DEPLOY_API_INFERENCE_R2_SECRET_ACCESS_KEY_OUTPUT_RW", "rw_secret_SHOULD_NOT_BE_IN_WORKER")
+    monkeypatch.setenv("VISGATE_DEPLOY_API_INFERENCE_R2_ACCESS_KEY_ID_INPUT_R", "ro_key_EXPECTED")
+    monkeypatch.setenv("VISGATE_DEPLOY_API_INFERENCE_R2_SECRET_ACCESS_KEY_INPUT_R", "ro_secret_EXPECTED")
     get_settings.cache_clear()
 
     # Env is now baked into the RunPod template, not the endpoint; capture from there.
@@ -112,8 +110,7 @@ async def test_worker_gets_r2_ro_key_not_rw(monkeypatch):
         await orchestrate_deployment(
             deployment_id="dep_test",
             runpod_api_key="rpa_userkey",
-            aws_access_key_id=None,
-            aws_secret_access_key=None,
+            hf_token_override="hf_user_token",
         )
 
     assert captured_env.get("VISGATE_R2_ACCESS_KEY_ID") == "ro_key_EXPECTED"
@@ -124,12 +121,12 @@ async def test_worker_gets_r2_ro_key_not_rw(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_worker_gets_user_private_key_over_platform_ro(monkeypatch):
-    """User's private keys take precedence over platform R2 RO key."""
+async def test_worker_skips_r2_credentials_when_ro_key_is_missing(monkeypatch):
+    """Worker env should omit VISGATE_R2_* when no platform RO key is configured."""
     from src.core.config import get_settings
     get_settings.cache_clear()
-    monkeypatch.setenv("VISGATE_DEPLOY_API_R2_ACCESS_KEY_ID_R", "ro_platform_key")
-    monkeypatch.setenv("VISGATE_DEPLOY_API_R2_SECRET_ACCESS_KEY_R", "ro_platform_secret")
+    monkeypatch.delenv("VISGATE_DEPLOY_API_INFERENCE_R2_ACCESS_KEY_ID_INPUT_R", raising=False)
+    monkeypatch.delenv("VISGATE_DEPLOY_API_INFERENCE_R2_SECRET_ACCESS_KEY_INPUT_R", raising=False)
     get_settings.cache_clear()
 
     captured_env, template_capturer = _make_template_capturer()
@@ -147,13 +144,11 @@ async def test_worker_gets_user_private_key_over_platform_ro(monkeypatch):
         await orchestrate_deployment(
             deployment_id="dep_private",
             runpod_api_key="rpa_userkey",
-            aws_access_key_id="user_private_key",
-            aws_secret_access_key="user_private_secret",
+            hf_token_override="hf_user_token",
         )
 
-    assert captured_env.get("VISGATE_R2_ACCESS_KEY_ID") == "user_private_key"
-    assert captured_env.get("VISGATE_R2_SECRET_ACCESS_KEY") == "user_private_secret"
-    assert "ro_platform_key" not in captured_env.values()
+    assert "VISGATE_R2_ACCESS_KEY_ID" not in captured_env
+    assert "VISGATE_R2_SECRET_ACCESS_KEY" not in captured_env
     get_settings.cache_clear()
 
 
@@ -178,6 +173,7 @@ async def test_runpod_api_key_in_worker_env(monkeypatch):
         await orchestrate_deployment(
             deployment_id="dep_cleanup",
             runpod_api_key="rpa_cleanupkey",
+            hf_token_override="hf_user_token",
         )
 
     assert captured_env.get("RUNPOD_API_KEY") == "rpa_cleanupkey"
@@ -215,6 +211,7 @@ async def test_worker_gets_absolute_internal_callback_urls_from_doc(monkeypatch)
         await orchestrate_deployment(
             deployment_id="dep_cleanup",
             runpod_api_key="rpa_cleanupkey",
+            hf_token_override="hf_user_token",
         )
 
     assert captured_env.get("VISGATE_WEBHOOK") == "https://api.example.com/internal/deployment-ready/dep_cleanup"
@@ -223,28 +220,22 @@ async def test_worker_gets_absolute_internal_callback_urls_from_doc(monkeypatch)
 
 
 # ---------------------------------------------------------------------------
-# HF platform token fallback
+# HF token policy
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
-async def test_hf_platform_token_injected_when_caller_omits_token(monkeypatch):
-    """Platform HF token is used when caller provides no hf_token."""
+async def test_missing_hf_token_fails_deployment(monkeypatch):
+    """Deployments must fail fast when caller omits HF token."""
     from src.core.config import get_settings
     get_settings.cache_clear()
-    monkeypatch.setenv("VISGATE_DEPLOY_API_HF_PRO_ACCESS_TOKEN", "hf_platform_xyz")
-    get_settings.cache_clear()
 
-    captured_env, template_capturer = _make_template_capturer()
-
-    async def mock_create_endpoint(**kwargs):
-        return {"id": "ep4", "url": "https://api.runpod.ai/v2/ep4/run"}
-
+    update_mock = MagicMock()
     mock_provider = MagicMock()
-    mock_provider.create_endpoint = AsyncMock(side_effect=mock_create_endpoint)
+    mock_provider.create_endpoint = AsyncMock()
 
     with ExitStack() as stack:
         _apply_base_patches(stack, mock_provider)
-        stack.enter_context(patch("src.services.deployment.create_serverless_template", new_callable=AsyncMock, side_effect=template_capturer))
+        stack.enter_context(patch("src.services.deployment.update_deployment", update_mock))
         from src.services.deployment import orchestrate_deployment
         await orchestrate_deployment(
             deployment_id="dep_hf",
@@ -252,16 +243,15 @@ async def test_hf_platform_token_injected_when_caller_omits_token(monkeypatch):
             hf_token_override=None,
         )
 
-    assert captured_env.get("HF_TOKEN") == "hf_platform_xyz"
+    assert any(call.args[3].get("error") == "Missing Hugging Face token" for call in update_mock.call_args_list)
     get_settings.cache_clear()
 
 
 @pytest.mark.asyncio
-async def test_caller_hf_token_overrides_platform_token(monkeypatch):
-    """Caller-provided hf_token takes precedence over platform token."""
+async def test_caller_hf_token_is_injected_into_worker(monkeypatch):
+    """Caller-provided hf_token is forwarded into worker env."""
     from src.core.config import get_settings
     get_settings.cache_clear()
-    monkeypatch.setenv("VISGATE_DEPLOY_API_HF_PRO_ACCESS_TOKEN", "hf_platform_xyz")
     get_settings.cache_clear()
 
     captured_env, template_capturer = _make_template_capturer()
@@ -318,7 +308,7 @@ async def test_worker_target_is_persisted_and_logged(monkeypatch):
         stack.enter_context(patch("src.services.deployment.get_gpu_registry", return_value=[]))
         stack.enter_context(patch("src.services.deployment.get_tier_mapping", return_value={}))
         stack.enter_context(patch("src.services.deployment.select_gpu_candidates", return_value=[("GPU_A40", "A40")]))
-        stack.enter_context(patch("src.services.db.get_firestore_client", return_value=MagicMock()))
+        stack.enter_context(patch("src.services.deployment.get_firestore_client", return_value=MagicMock()))
         stack.enter_context(patch("src.services.deployment.validate_model", new_callable=AsyncMock, return_value=_make_model_info(10)))
         stack.enter_context(patch("src.services.deployment.append_log", append_log_mock))
         stack.enter_context(patch("src.services.deployment.notify", new_callable=AsyncMock, return_value=True))
@@ -332,6 +322,7 @@ async def test_worker_target_is_persisted_and_logged(monkeypatch):
         await orchestrate_deployment(
             deployment_id="dep_audio",
             runpod_api_key="rpa_audio",
+            hf_token_override="hf_user_token",
         )
 
     assert any(
@@ -387,7 +378,7 @@ async def test_video_deployment_uses_warm_worker_and_extended_load_wait(monkeypa
         stack.enter_context(patch("src.services.deployment.get_gpu_registry", return_value=[]))
         stack.enter_context(patch("src.services.deployment.get_tier_mapping", return_value={}))
         stack.enter_context(patch("src.services.deployment.select_gpu_candidates", return_value=[("GPU_A40", "A40")]))
-        stack.enter_context(patch("src.services.db.get_firestore_client", return_value=MagicMock()))
+        stack.enter_context(patch("src.services.deployment.get_firestore_client", return_value=MagicMock()))
         stack.enter_context(patch("src.services.deployment.validate_model", new_callable=AsyncMock, return_value=_make_model_info(24)))
         stack.enter_context(patch("src.services.deployment.append_log"))
         stack.enter_context(patch("src.services.deployment.notify", new_callable=AsyncMock, return_value=True))
@@ -401,6 +392,7 @@ async def test_video_deployment_uses_warm_worker_and_extended_load_wait(monkeypa
         await orchestrate_deployment(
             deployment_id="dep_video",
             runpod_api_key="rpa_video",
+            hf_token_override="hf_user_token",
         )
 
     assert captured_kwargs["workers_min"] == 1
@@ -452,7 +444,7 @@ async def test_video_deployment_does_not_use_health_probe_readiness(monkeypatch)
         stack.enter_context(patch("src.services.deployment.get_gpu_registry", return_value=[]))
         stack.enter_context(patch("src.services.deployment.get_tier_mapping", return_value={}))
         stack.enter_context(patch("src.services.deployment.select_gpu_candidates", return_value=[("GPU_A40", "A40")]))
-        stack.enter_context(patch("src.services.db.get_firestore_client", return_value=MagicMock()))
+        stack.enter_context(patch("src.services.deployment.get_firestore_client", return_value=MagicMock()))
         stack.enter_context(patch("src.services.deployment.validate_model", new_callable=AsyncMock, return_value=_make_model_info(24)))
         stack.enter_context(patch("src.services.deployment.append_log"))
         stack.enter_context(patch("src.services.deployment.notify", new_callable=AsyncMock, return_value=True))
@@ -466,6 +458,7 @@ async def test_video_deployment_does_not_use_health_probe_readiness(monkeypatch)
         await orchestrate_deployment(
             deployment_id="dep_video",
             runpod_api_key="rpa_video",
+            hf_token_override="hf_user_token",
         )
 
     probe_mock.assert_not_awaited()
@@ -479,11 +472,10 @@ async def test_video_deployment_uses_r2_cache_hit_s3_url(monkeypatch):
     get_settings.cache_clear()
     monkeypatch.setenv("RUNPOD_TEMPLATE_ID_VIDEO", "tpl-video")
     monkeypatch.setenv("DOCKER_IMAGE_VIDEO", "visgateai/inference-video:latest")
-    monkeypatch.setenv("VISGATE_DEPLOY_API_R2_ACCESS_KEY_ID_RW", "rw_key")
-    monkeypatch.setenv("VISGATE_DEPLOY_API_R2_SECRET_ACCESS_KEY_RW", "rw_secret")
-    monkeypatch.setenv("VISGATE_DEPLOY_API_R2_ACCESS_KEY_ID_R", "ro_key")
-    monkeypatch.setenv("VISGATE_DEPLOY_API_R2_SECRET_ACCESS_KEY_R", "ro_secret")
-    monkeypatch.setenv("VISGATE_DEPLOY_API_S3_API_R2", "https://acct.r2.cloudflarestorage.com")
+    monkeypatch.setenv("VISGATE_DEPLOY_API_INFERENCE_R2_ACCESS_KEY_ID_OUTPUT_RW", "rw_key")
+    monkeypatch.setenv("VISGATE_DEPLOY_API_INFERENCE_R2_SECRET_ACCESS_KEY_OUTPUT_RW", "rw_secret")
+    monkeypatch.setenv("VISGATE_DEPLOY_API_INFERENCE_R2_ACCESS_KEY_ID_INPUT_R", "ro_key")
+    monkeypatch.setenv("VISGATE_DEPLOY_API_INFERENCE_R2_SECRET_ACCESS_KEY_INPUT_R", "ro_secret")
     get_settings.cache_clear()
 
     captured_kwargs: dict = {}
@@ -511,7 +503,7 @@ async def test_video_deployment_uses_r2_cache_hit_s3_url(monkeypatch):
         stack.enter_context(patch("src.services.deployment.get_gpu_registry", return_value=[]))
         stack.enter_context(patch("src.services.deployment.get_tier_mapping", return_value={}))
         stack.enter_context(patch("src.services.deployment.select_gpu_candidates", return_value=[("GPU_A40", "A40")]))
-        stack.enter_context(patch("src.services.db.get_firestore_client", return_value=MagicMock()))
+        stack.enter_context(patch("src.services.deployment.get_firestore_client", return_value=MagicMock()))
         stack.enter_context(patch("src.services.deployment.validate_model", new_callable=AsyncMock, return_value=_make_model_info(24)))
         stack.enter_context(patch("src.services.deployment.append_log"))
         stack.enter_context(patch("src.services.deployment.notify", new_callable=AsyncMock, return_value=True))
@@ -527,6 +519,7 @@ async def test_video_deployment_uses_r2_cache_hit_s3_url(monkeypatch):
         await orchestrate_deployment(
             deployment_id="dep_video",
             runpod_api_key="rpa_video",
+            hf_token_override="hf_user_token",
         )
 
     # Env is now baked into the per-deployment RunPod template, not the endpoint.

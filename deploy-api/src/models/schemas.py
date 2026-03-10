@@ -16,31 +16,11 @@ class DeploymentCreate(BaseModel):
     user_runpod_key: str | None = Field(default=None, min_length=1, description="RunPod API key. If omitted, the Authorization Bearer token is used. Providing it here takes precedence.")
     user_webhook_url: HttpUrl | None = Field(default=None, description="Optional URL to notify when deployment is ready")
     gpu_tier: str | None = Field(default=None, max_length=64, description="e.g. A40; auto-select if omitted")
-    hf_token: str | None = Field(default=None, description="Optional HF token for gated models")
+    hf_token: str | None = Field(default=None, description="Hugging Face token owned by the caller. Required for model access and license attribution.")
     region: str | None = Field(default=None, max_length=32, description="Preferred Runpod region/location")
     task: str | None = Field(
         default="text_to_image",
         description="Intended task for compatibility checks",
-    )
-    cache_scope: Literal["off", "shared", "private"] | None = Field(
-        default="off",
-        description="Model cache scope: off, shared (platform), or private (user-provided)",
-    )
-    user_s3_url: str | None = Field(
-        default=None,
-        description="Private cache base URL (S3/R2/Minio). Used when cache_scope=private",
-    )
-    user_aws_access_key_id: str | None = Field(
-        default=None,
-        description="Private cache AWS access key (cache_scope=private)",
-    )
-    user_aws_secret_access_key: str | None = Field(
-        default=None,
-        description="Private cache AWS secret access key (cache_scope=private)",
-    )
-    user_aws_endpoint_url: str | None = Field(
-        default=None,
-        description="Private cache endpoint URL (cache_scope=private)",
     )
 
     @field_validator("task", mode="before")
@@ -223,14 +203,6 @@ class InferencePolicy(BaseModel):
     low_priority: bool = False
 
 
-class InferenceS3Config(BaseModel):
-    accessId: str = Field(..., min_length=1)
-    accessSecret: str = Field(..., min_length=1)
-    bucketName: str = Field(..., min_length=1)
-    endpointUrl: str = Field(..., min_length=1)
-    keyPrefix: str | None = Field(default=None, min_length=1)
-
-
 class InferenceOutputDestination(BaseModel):
     bucket_name: str
     endpoint_url: str
@@ -258,7 +230,6 @@ class InferenceJobCreate(BaseModel):
     input: dict[str, Any] = Field(default_factory=dict)
     user_webhook_url: HttpUrl | None = Field(default=None, description="Optional user webhook for job completion notifications")
     policy: InferencePolicy | None = None
-    s3_config: InferenceS3Config | None = Field(default=None, alias="s3Config")
 
     @field_validator("task", mode="before")
     @classmethod

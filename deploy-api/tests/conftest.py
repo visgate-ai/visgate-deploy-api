@@ -9,6 +9,12 @@ from fastapi.testclient import TestClient
 # Ensure src is on path and GCP env for tests
 os.environ.setdefault("GCP_PROJECT_ID", "visgate")
 os.environ.setdefault("LOG_FORMAT", "readable")
+os.environ.setdefault("VISGATE_DEPLOY_API_INFERENCE_R2_ACCESS_KEY_ID_OUTPUT_RW", "rw-key")
+os.environ.setdefault("VISGATE_DEPLOY_API_INFERENCE_R2_SECRET_ACCESS_KEY_OUTPUT_RW", "rw-secret")
+os.environ.setdefault("VISGATE_DEPLOY_API_INFERENCE_R2_ACCESS_KEY_ID_INPUT_R", "ro-key")
+os.environ.setdefault("VISGATE_DEPLOY_API_INFERENCE_R2_SECRET_ACCESS_KEY_INPUT_R", "ro-secret")
+os.environ.setdefault("VISGATE_DEPLOY_API_INFERENCE_R2_BUCKET_NAME_OUTPUT", "platform-output")
+os.environ.setdefault("VISGATE_DEPLOY_API_INFERENCE_R2_BUCKET_NAME_INPUT", "platform-input")
 
 # In-memory store for mocked Firestore
 _firestore_store: dict[str, dict] = {}
@@ -80,6 +86,7 @@ def deployment_create_payload() -> dict:
     return {
         "hf_model_id": "black-forest-labs/FLUX.1-schnell",
         "user_runpod_key": "rpa_test_key_placeholder",
+        "hf_token": "hf_user_token",
         "user_webhook_url": "https://example.com/webhook",
         "gpu_tier": "A40",
     }
