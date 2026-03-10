@@ -8,11 +8,11 @@ from typing import Annotated
 
 from fastapi import Depends, Header, HTTPException, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from google.cloud import firestore
-from src.services.db import get_firestore_client
 
 from src.core.config import get_settings
 from src.core.errors import RateLimitError, UnauthorizedError
+from src.services.db import get_firestore_client
+
 
 def _get_repo():
     from src.core.config import get_settings
@@ -27,6 +27,7 @@ security = HTTPBearer(auto_error=False)
 # In-memory rate limit: subject -> list of request timestamps (sliding window)
 _rate_limit_store: dict[str, list[float]] = defaultdict(list)
 RATE_LIMIT_WINDOW = 60.0  # seconds
+LOCALHOST_IPS = {"127.0.0.1", "::1", "localhost"}
 
 
 @dataclass(frozen=True)
@@ -61,12 +62,14 @@ async def get_request_context(
 ) -> RequestContext:
     """Resolve stateless auth and rate-limit context using RUNPOD API key."""
     import os
+    client_ip = request.client.host if request.client else "unknown"
 
     # DEV MODE: Skip auth for local testing
     if os.getenv("DEV_MODE") == "true":
+        if client_ip not in LOCALHOST_IPS:
+            raise UnauthorizedError("DEV_MODE auth bypass is restricted to localhost")
         runpod_api_key = os.getenv("DEV_RUNPOD_KEY", "dev-runpod-key")
         user_hash = hashlib.sha256(runpod_api_key.encode("utf-8")).hexdigest()
-        client_ip = request.client.host if request.client else "unknown"
         _check_rate_limit(user_hash, get_settings().rate_limit_requests_per_minute)
         return RequestContext(runpod_api_key=runpod_api_key, user_hash=user_hash, client_ip=client_ip)
 
@@ -80,7 +83,6 @@ async def get_request_context(
         raise UnauthorizedError("Missing or invalid Runpod API key")
 
     user_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
-    client_ip = request.client.host if request.client else "unknown"
     settings = get_settings()
 
     # Rate limit per user_hash and IP (best-effort)
@@ -100,5 +102,3 @@ def verify_internal_webhook_secret(
         return
     if x_visgate_secret != settings.internal_webhook_secret:
         raise HTTPException(status_code=403, detail="Invalid internal secret")
-
-from src.services.db import get_firestore_client

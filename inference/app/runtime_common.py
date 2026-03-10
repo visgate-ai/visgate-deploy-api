@@ -30,14 +30,16 @@ def mask_sensitive(text: str) -> str:
     return text
 
 
-def post_json(url: str, payload: dict[str, Any]) -> None:
+def post_json(url: str, payload: dict[str, Any], headers: dict[str, str] | None = None) -> None:
     import json
 
-    headers = {"Content-Type": "application/json"}
+    req_headers = {"Content-Type": "application/json"}
+    if headers:
+        req_headers.update(headers)
     if VISGATE_INTERNAL_SECRET:
-        headers["X-Visgate-Internal-Secret"] = VISGATE_INTERNAL_SECRET
+        req_headers["X-Visgate-Internal-Secret"] = VISGATE_INTERNAL_SECRET
     data = json.dumps(payload).encode("utf-8")
-    req = urllib.request.Request(url, data=data, headers=headers, method="POST")
+    req = urllib.request.Request(url, data=data, headers=req_headers, method="POST")
     with urllib.request.urlopen(req, timeout=30):
         return
 
@@ -150,8 +152,28 @@ def upload_bytes(
 
 
 def download_to_tempfile(url: str, suffix: str) -> str:
-    with urllib.request.urlopen(url, timeout=60) as response:
-        data = response.read()
+    max_bytes = int(os.getenv("MAX_INPUT_DOWNLOAD_BYTES", str(512 * 1024 * 1024)))
+    chunk_size = 1024 * 1024
+    tmp_path = ""
     with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
-        tmp.write(data)
-        return tmp.name
+        tmp_path = tmp.name
+    try:
+        written = 0
+        with urllib.request.urlopen(url, timeout=60) as response:
+            content_length = response.headers.get("Content-Length")
+            if content_length and int(content_length) > max_bytes:
+                raise ValueError("Input file exceeds MAX_INPUT_DOWNLOAD_BYTES")
+            with open(tmp_path, "wb") as out:
+                while True:
+                    chunk = response.read(chunk_size)
+                    if not chunk:
+                        break
+                    written += len(chunk)
+                    if written > max_bytes:
+                        raise ValueError("Input file exceeds MAX_INPUT_DOWNLOAD_BYTES")
+                    out.write(chunk)
+        return tmp_path
+    except Exception:
+        if tmp_path and os.path.exists(tmp_path):
+            os.remove(tmp_path)
+        raise

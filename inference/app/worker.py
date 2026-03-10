@@ -25,6 +25,7 @@ from app.config import (
     DEFAULT_GUIDANCE_SCALE,
     DEFAULT_NUM_INFERENCE_STEPS,
     DEVICE,
+    HF_TOKEN,
     HF_MODEL_ID,
     MODEL_LOAD_WAIT_TIMEOUT_SECONDS,
     VISGATE_WEBHOOK,
@@ -40,6 +41,7 @@ _load_error: Optional[str] = None
 _last_request_at: float = 0.0
 _failure_count: int = 0
 _task_kind: str = "text2img"
+_state_lock = threading.RLock()
 
 
 def _notify_orchestrator(
@@ -91,29 +93,37 @@ def _load_model_background() -> None:
     global _pipeline, _load_error, _task_kind
 
     try:
-        _task_kind = detect_task(HF_MODEL_ID, os.environ.get("TASK", ""))
+        with _state_lock:
+            _task_kind = detect_task(HF_MODEL_ID, os.environ.get("TASK", ""))
         log_tunnel("INFO", f"Detected task: {_task_kind} for model: {HF_MODEL_ID}")
 
-        effective_model_id = _runtime_video_model_id(HF_MODEL_ID) if _task_kind == "text2video" else HF_MODEL_ID
+        with _state_lock:
+            task_kind = _task_kind
+        effective_model_id = _runtime_video_model_id(HF_MODEL_ID) if task_kind == "text2video" else HF_MODEL_ID
         model_source, use_local, t_r2_sync_s, loaded_from_cache = resolve_model_source(effective_model_id)
 
-        _notify_orchestrator("loading_model", f"Model loading started ({_task_kind})")
+        _notify_orchestrator("loading_model", f"Model loading started ({task_kind})")
         t0 = time.time()
 
-        if _task_kind == "text2img":
+        loaded_pipeline: Optional[Any] = None
+        if task_kind == "text2img":
             from pipelines.registry import load_pipeline
-            _pipeline = load_pipeline(model_id=effective_model_id, token=HF_TOKEN, device=DEVICE)
+            loaded_pipeline = load_pipeline(model_id=effective_model_id, token=HF_TOKEN, device=DEVICE)
         
-        elif _task_kind == "text2video":
+        elif task_kind == "text2video":
             from diffusers import DiffusionPipeline
-            _pipeline = DiffusionPipeline.from_pretrained(model_source, torch_dtype=_torch_dtype(), token=HF_TOKEN)
+            loaded_pipeline = DiffusionPipeline.from_pretrained(model_source, torch_dtype=_torch_dtype(), token=HF_TOKEN)
             if DEVICE.startswith("cuda"):
-                _pipeline.to(DEVICE)
+                loaded_pipeline.to(DEVICE)
                 
-        elif _task_kind in ("speech_to_text", "text_to_speech"):
+        elif task_kind in ("speech_to_text", "text_to_speech"):
             from transformers import pipeline
-            pipeline_task = "automatic-speech-recognition" if _task_kind == "speech_to_text" else "text-to-audio"
-            _pipeline = pipeline(pipeline_task, model=model_source, token=HF_TOKEN, device=0 if DEVICE.startswith("cuda") else -1)
+            pipeline_task = "automatic-speech-recognition" if task_kind == "speech_to_text" else "text-to-audio"
+            loaded_pipeline = pipeline(pipeline_task, model=model_source, token=HF_TOKEN, device=0 if DEVICE.startswith("cuda") else -1)
+
+        with _state_lock:
+            _pipeline = loaded_pipeline
+            _load_error = None
             
         load_elapsed = time.time() - t0
         log_tunnel("INFO", f"Pipeline loaded successfully in {load_elapsed:.1f}s")
@@ -128,7 +138,8 @@ def _load_model_background() -> None:
         )
     except Exception as exc:
         import traceback
-        _load_error = str(exc)
+        with _state_lock:
+            _load_error = str(exc)
         log_tunnel("ERROR", f"Model load failed: {exc}")
         _notify_orchestrator("failed", _load_error)
         request_cleanup("startup_failure")
@@ -207,33 +218,38 @@ def _handle_video(job: dict[str, Any], job_input: dict[str, Any]) -> dict[str, A
 
     if isinstance(frames_raw, np.ndarray):
         if frames_raw.ndim == 5:
-            frames_raw = frames_raw[0]
-        arrays = [frames_raw[i] for i in range(len(frames_raw))]
+            frames_iter = frames_raw[0]
+        else:
+            frames_iter = frames_raw
     else:
-        # Fallback list handling
-        if isinstance(frames_raw, list) and isinstance(frames_raw[0], list):
+        if isinstance(frames_raw, list) and frames_raw and isinstance(frames_raw[0], list):
             frames_raw = frames_raw[0]
-        arrays = [np.array(f.convert("RGB")) if hasattr(f, "convert") else np.asarray(f) for f in frames_raw]
+        frames_iter = frames_raw
 
-    result_frames = []
-    for arr in arrays:
-        arr = np.asarray(arr)
-        if arr.dtype != np.uint8:
-            arr = (arr * 255 if arr.max() <= 1.0 else arr).clip(0, 255).astype(np.uint8)
-        result_frames.append(arr)
-
+    frame_count = 0
+    tmp_name = ""
     with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as tmp:
-        imageio.mimwrite(tmp.name, result_frames, fps=int(job_input.get("fps", 8)))
-        tmp.flush()
-        with open(tmp.name, "rb") as fh:
+        tmp_name = tmp.name
+    try:
+        with imageio.get_writer(tmp_name, fps=int(job_input.get("fps", 8))) as writer:
+            for frame in frames_iter:
+                arr = np.array(frame.convert("RGB")) if hasattr(frame, "convert") else np.asarray(frame)
+                if arr.dtype != np.uint8:
+                    arr = (arr * 255 if arr.max() <= 1.0 else arr).clip(0, 255).astype(np.uint8)
+                writer.append_data(arr)
+                frame_count += 1
+
+        with open(tmp_name, "rb") as fh:
             video_bytes = fh.read()
+    finally:
+        if tmp_name and os.path.exists(tmp_name):
+            os.remove(tmp_name)
 
     artifact = upload_bytes(video_bytes, job, job_input, content_type="video/mp4", extension="mp4")
-    os.remove(tmp.name)
 
     payload: dict[str, Any] = {
         "model_id": HF_MODEL_ID,
-        "frame_count": len(result_frames),
+        "frame_count": frame_count,
     }
     if artifact:
         payload["artifact"] = artifact
@@ -288,39 +304,60 @@ def handler(job: dict[str, Any]) -> dict[str, Any]:
     job_input = job.get("input") or {}
     
     if job_input.get("debug") is True:
-        return {"status": "ok", "pipeline_loaded": _pipeline is not None, "task": _task_kind, "error": _load_error}
+        with _state_lock:
+            return {
+                "status": "ok",
+                "pipeline_loaded": _pipeline is not None,
+                "task": _task_kind,
+                "error": _load_error,
+            }
         
-    if _pipeline is None:
+    with _state_lock:
+        pipeline = _pipeline
+        load_error = _load_error
+
+    if pipeline is None:
         wait_start = time.time()
-        while _pipeline is None and _load_error is None:
+        while True:
+            with _state_lock:
+                pipeline = _pipeline
+                load_error = _load_error
+            if pipeline is not None or load_error is not None:
+                break
             if time.time() - wait_start > MODEL_LOAD_WAIT_TIMEOUT_SECONDS:
                 return {"error": "Model failed to load within timeout.", "status": "loading"}
             time.sleep(2)
-        if _load_error:
-            return {"error": f"Model load failed: {_load_error}", "status": "failed"}
+        if load_error:
+            return {"error": f"Model load failed: {load_error}", "status": "failed"}
 
     try:
         global _last_request_at
-        _last_request_at = time.time()
+        with _state_lock:
+            _last_request_at = time.time()
         started_at = time.time()
+        with _state_lock:
+            task_kind = _task_kind
 
-        if _task_kind == "text2img":
+        if task_kind == "text2img":
             result = _handle_image(job, job_input)
-        elif _task_kind == "text2video":
+        elif task_kind == "text2video":
             result = _handle_video(job, job_input)
         else:
             result = _handle_audio(job, job_input)
 
         if "error" not in result:
             result["execution_duration_ms"] = max(int((time.time() - started_at) * 1000), 0)
-            _failure_count = 0
+            with _state_lock:
+                _failure_count = 0
             
         return result
     except Exception as exc:
         import traceback
-        _failure_count += 1
+        with _state_lock:
+            _failure_count += 1
+            failure_count = _failure_count
         log_tunnel("ERROR", f"Inference failed: {exc}")
-        if _failure_count >= CLEANUP_FAILURE_THRESHOLD:
+        if failure_count >= CLEANUP_FAILURE_THRESHOLD:
             request_cleanup("inference_failure_threshold")
         return {"error": str(exc), "traceback": traceback.format_exc(), "model_id": HF_MODEL_ID}
 
@@ -331,9 +368,12 @@ def main() -> None:
     def _idle_watchdog() -> None:
         while True:
             time.sleep(15)
-            if _pipeline is None or _last_request_at == 0.0:
+            with _state_lock:
+                pipeline = _pipeline
+                last_request_at = _last_request_at
+            if pipeline is None or last_request_at == 0.0:
                 continue
-            if time.time() - _last_request_at > CLEANUP_IDLE_TIMEOUT_SECONDS:
+            if time.time() - last_request_at > CLEANUP_IDLE_TIMEOUT_SECONDS:
                 log_tunnel("WARNING", "Idle timeout reached, requesting cleanup")
                 request_cleanup("idle_timeout")
                 return

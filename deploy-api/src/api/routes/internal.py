@@ -8,9 +8,10 @@ import time
 from datetime import UTC, datetime
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Header, HTTPException, Query
+from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from pydantic import BaseModel
 
+from src.api.dependencies import verify_internal_webhook_secret
 from src.core.config import get_settings
 from src.core.logging import structured_log
 from src.models.schemas import DeploymentReadyPayload
@@ -228,10 +229,7 @@ async def run_orchestration_task(
 @router.post("/tasks/cache-model")
 async def task_cache_model(
     payload: CacheModelPayload,
-    x_visgate_secret: Annotated[
-        str | None,
-        Header(alias="X-Visgate-Internal-Secret"),
-    ] = None,
+    _: Annotated[None, Depends(verify_internal_webhook_secret)] = None,
     x_cloudtasks_taskname: Annotated[
         str | None,
         Header(alias="X-CloudTasks-TaskName"),
@@ -246,9 +244,6 @@ async def task_cache_model(
     Runs independently as a background job.
     """
     settings = get_settings()
-
-    if settings.internal_webhook_secret and x_visgate_secret != settings.internal_webhook_secret:
-        raise HTTPException(status_code=403, detail="Invalid internal secret")
 
     if not settings.r2_access_key_id_rw or not settings.r2_endpoint_url:
         return {"status": "skipped", "reason": "R2 not configured"}
@@ -329,20 +324,11 @@ async def task_cache_model(
 async def deployment_ready(
     deployment_id: str,
     payload: DeploymentReadyPayload | None = None,
-    secret: str | None = None,
-    x_visgate_secret: Annotated[
-        str | None,
-        Header(alias="X-Visgate-Internal-Secret"),
-    ] = None,
+    _: Annotated[None, Depends(verify_internal_webhook_secret)] = None,
 ) -> dict:
     """
     Called by inference container when model is loaded. Sets status=ready and notifies user webhook.
     """
-    settings = get_settings()
-    provided_secret = x_visgate_secret or secret
-    if settings.internal_webhook_secret and provided_secret != settings.internal_webhook_secret:
-        raise HTTPException(status_code=403, detail="Invalid internal secret")
-
     data = payload or DeploymentReadyPayload()
 
     if data.status == "ready":
@@ -395,6 +381,14 @@ async def inference_job_complete(
     job = get_inference_job(client, collection, job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Inference job not found")
+
+    payload_deployment_id = payload.get("deployment_id")
+    if payload_deployment_id and payload_deployment_id != job.deployment_id:
+        raise HTTPException(status_code=403, detail="Deployment mismatch for job callback")
+
+    deployment = get_deployment(client, settings.firestore_collection_deployments, job.deployment_id)
+    if not deployment:
+        raise HTTPException(status_code=404, detail="Parent deployment not found")
 
     provider_status = payload.get("status") or job.provider_status
     status_value = map_provider_status(provider_status)
@@ -466,18 +460,9 @@ async def inference_job_complete(
 async def log_tunnel(
     deployment_id: str,
     payload: LiveLogPayload,
-    secret: str | None = None,
-    x_visgate_secret: Annotated[
-        str | None,
-        Header(alias="X-Visgate-Internal-Secret"),
-    ] = None,
+    _: Annotated[None, Depends(verify_internal_webhook_secret)] = None,
 ) -> dict:
     """Accept live log lines from worker for SSE tunneling."""
-    settings = get_settings()
-    provided_secret = x_visgate_secret or secret
-    if settings.internal_webhook_secret and provided_secret != settings.internal_webhook_secret:
-        raise HTTPException(status_code=403, detail="Invalid internal secret")
-
     append_live_log(deployment_id, payload.level.upper(), payload.message)
     return {"status": "ok"}
 
@@ -486,18 +471,10 @@ async def log_tunnel(
 async def cleanup_endpoint(
     deployment_id: str,
     payload: CleanupPayload | None = None,
-    secret: str | None = None,
-    x_visgate_secret: Annotated[
-        str | None,
-        Header(alias="X-Visgate-Internal-Secret"),
-    ] = None,
+    _: Annotated[None, Depends(verify_internal_webhook_secret)] = None,
 ) -> dict:
     """Worker-triggered cleanup to avoid idle billing leaks."""
     settings = get_settings()
-    provided_secret = x_visgate_secret or secret
-    if settings.internal_webhook_secret and provided_secret != settings.internal_webhook_secret:
-        raise HTTPException(status_code=403, detail="Invalid internal secret")
-
     fs_client = _get_repo().get_firestore_client(settings.gcp_project_id)
     doc = get_deployment(fs_client, settings.firestore_collection_deployments, deployment_id)
     if not doc or not doc.runpod_endpoint_id:
@@ -525,21 +502,13 @@ async def cleanup_endpoint(
 @router.post("/model-cached")
 async def model_cached(
     payload: ModelCachedPayload,
-    secret: str | None = None,
-    x_visgate_secret: Annotated[
-        str | None,
-        Header(alias="X-Visgate-Internal-Secret"),
-    ] = None,
+    _: Annotated[None, Depends(verify_internal_webhook_secret)] = None,
 ) -> dict:
     """
     Called by worker after successfully uploading a model to R2.
     Updates the R2 manifest and marks the deployment as r2_cached.
     """
     settings = get_settings()
-    provided_secret = x_visgate_secret or secret
-    if settings.internal_webhook_secret and provided_secret != settings.internal_webhook_secret:
-        raise HTTPException(status_code=403, detail="Invalid internal secret")
-
     if not settings.r2_access_key_id_rw or not settings.r2_endpoint_url:
         return {"status": "skipped", "reason": "R2 not configured"}
 

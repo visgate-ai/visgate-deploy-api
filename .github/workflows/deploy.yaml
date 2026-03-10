@@ -47,7 +47,9 @@ jobs:
         working-directory: deploy-api
         run: |
           pip install -r requirements.txt -r requirements-dev.txt
-          python -m pytest tests/ -q --tb=short
+          python -m ruff check src tests
+          python -m mypy src
+          python -m pytest tests/ -q --tb=short --cov=src --cov-report=term-missing --cov-fail-under=70
 
       - name: Configure Docker
         run: gcloud auth configure-docker europe-west3-docker.pkg.dev --quiet
