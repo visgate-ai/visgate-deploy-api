@@ -13,7 +13,6 @@ on:
         default: https://visgate-deploy-api-wxup7pxrsa-ey.a.run.app/deployapi
   workflow_run:
     workflows:
-      - Deploy to Cloud Run
       - Build and Push Inference Worker
     types:
       - completed
@@ -72,6 +71,44 @@ jobs:
             echo "R2_ENDPOINT_URL=https://088e0d2618d33e55a76e4d65b439d6c4.r2.cloudflarestorage.com"
             echo "GCP_PROJECT_ID=$PROJECT_ID"
           } >> "$GITHUB_ENV"
+
+      - name: Wait for deploy workflow on same SHA
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          TARGET_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import subprocess
+          import sys
+          import time
+
+          repo = os.environ["REPO"]
+          target_sha = os.environ["TARGET_SHA"]
+          endpoint = f"repos/{repo}/actions/workflows/deploy.yaml/runs?head_sha={target_sha}&per_page=5"
+
+          for _ in range(60):
+              output = subprocess.check_output(["gh", "api", endpoint], text=True)
+              runs = json.loads(output).get("workflow_runs", [])
+              if runs:
+                  run = runs[0]
+                  status = run.get("status")
+                  conclusion = run.get("conclusion")
+                  print(json.dumps({
+                      "deploy_run_id": run.get("id"),
+                      "status": status,
+                      "conclusion": conclusion,
+                  }))
+                  if status == "completed":
+                      if conclusion != "success":
+                          raise SystemExit(f"Deploy workflow failed for {target_sha}: {conclusion}")
+                      break
+              time.sleep(10)
+          else:
+              raise SystemExit(f"Timed out waiting for deploy workflow on {target_sha}")
+          PY
 
       - name: Run live smoke
         env:

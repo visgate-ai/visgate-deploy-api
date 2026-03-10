@@ -130,6 +130,16 @@ def _poll_json(url: str, terminal_statuses: set[str], *, timeout_seconds: int) -
 
 
 class _WebhookHandler(BaseHTTPRequestHandler):
+    def do_GET(self) -> None:  # noqa: N802
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.end_headers()
+        self.wfile.write(b'{"ok":true}')
+
+    def do_HEAD(self) -> None:  # noqa: N802
+        self.send_response(200)
+        self.end_headers()
+
     def do_POST(self) -> None:  # noqa: N802
         length = int(self.headers.get("Content-Length", "0"))
         raw = self.rfile.read(length) if length else b"{}"
@@ -189,6 +199,20 @@ def _start_cloudflared(port: int) -> tuple[subprocess.Popen[str], str]:
             raise RuntimeError("cloudflared exited before publishing a tunnel URL")
         time.sleep(1)
     raise TimeoutError("Timed out waiting for cloudflared tunnel URL")
+
+
+def _wait_for_tunnel_ready(tunnel_url: str, *, timeout_seconds: int = 90) -> None:
+    deadline = time.time() + timeout_seconds
+    probe_url = f"{tunnel_url.rstrip('/')}/healthz"
+    while time.time() < deadline:
+        try:
+            with urllib.request.urlopen(probe_url, timeout=10) as response:
+                if 200 <= response.status < 300:
+                    return
+        except Exception:
+            pass
+        time.sleep(2)
+    raise TimeoutError(f"Timed out waiting for tunnel readiness at {probe_url}")
 
 
 @dataclass
@@ -390,10 +414,21 @@ def main() -> int:
     server, port = _start_webhook_server()
     tunnel_process = None
     results: list[dict[str, Any]] = []
+    failures: list[dict[str, Any]] = []
     try:
         tunnel_process, tunnel_url = _start_cloudflared(port)
+        _wait_for_tunnel_ready(tunnel_url)
         for modality in modalities:
-            results.append(_deployment_and_job(modality, tunnel_url))
+            try:
+                results.append(_deployment_and_job(modality, tunnel_url))
+            except Exception as exc:
+                failure = {
+                    "modality": modality,
+                    "error": str(exc),
+                    "type": type(exc).__name__,
+                }
+                failures.append(failure)
+                results.append(failure)
     finally:
         server.shutdown()
         server.server_close()
@@ -405,9 +440,9 @@ def main() -> int:
                 tunnel_process.kill()
 
     output_path = Path(args.output)
-    output_path.write_text(json.dumps({"results": results}, indent=2), encoding="utf-8")
+    output_path.write_text(json.dumps({"results": results, "failures": failures}, indent=2), encoding="utf-8")
     print(output_path.read_text(encoding="utf-8"))
-    return 0
+    return 1 if failures else 0
 
 
 if __name__ == "__main__":
