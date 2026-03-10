@@ -42,6 +42,7 @@ New model families can be added by adding a pipeline class in `pipelines/` and r
 All fields except `input.prompt` are optional. In production, deploy-api stages media inputs into platform R2 and injects platform-managed output storage, so callers do not provide `s3Config`.
 
 GitHub Actions publishes separate `latest` images for image, audio, and video worker profiles before the live smoke workflow runs.
+The smoke workflow verifies webhook delivery from Cloud Run logs instead of depending on an inbound tunnel receiver.
 
 ## Job output
 
