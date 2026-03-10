@@ -55,6 +55,9 @@ class DeploymentDoc:
     worker_image: str | None = None
     internal_webhook_base_url: str | None = None
     runpod_dep_template_name: str | None = None
+    t_r2_sync_s: float | None = None
+    t_model_load_s: float | None = None
+    loaded_from_cache: bool | None = None
 
     def to_firestore_dict(self) -> dict[str, Any]:
         return {
@@ -85,6 +88,9 @@ class DeploymentDoc:
             "worker_image": self.worker_image,
             "internal_webhook_base_url": self.internal_webhook_base_url,
             "runpod_dep_template_name": self.runpod_dep_template_name,
+            "t_r2_sync_s": self.t_r2_sync_s,
+            "t_model_load_s": self.t_model_load_s,
+            "loaded_from_cache": self.loaded_from_cache,
         }
 
     @classmethod
@@ -118,6 +124,9 @@ class DeploymentDoc:
             worker_image=d.get("worker_image"),
             internal_webhook_base_url=d.get("internal_webhook_base_url"),
             runpod_dep_template_name=d.get("runpod_dep_template_name"),
+            t_r2_sync_s=d.get("t_r2_sync_s"),
+            t_model_load_s=d.get("t_model_load_s"),
+            loaded_from_cache=d.get("loaded_from_cache"),
         )
 
 

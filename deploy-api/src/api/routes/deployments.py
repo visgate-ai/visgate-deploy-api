@@ -25,9 +25,24 @@ from src.models.schemas import (
 )
 from src.services.deployment import mark_deployment_ready_and_notify
 from src.services.endpoint_naming import model_slug, pool_endpoint_name, user_endpoint_name
-from src.services.firestore_repo import get_deployment, list_deployments, set_deployment
 from src.services.internal_urls import resolve_internal_base_url
 from src.services.log_tunnel import get_live_logs_since
+
+def _get_repo():
+    if get_settings().effective_use_memory_repo:
+        import src.services.memory_repo as repo
+    else:
+        import src.services.firestore_repo as repo
+    return repo
+
+def get_deployment(*args, **kwargs):
+    return _get_repo().get_deployment(*args, **kwargs)
+
+def list_deployments(*args, **kwargs):
+    return _get_repo().list_deployments(*args, **kwargs)
+
+def set_deployment(*args, **kwargs):
+    return _get_repo().set_deployment(*args, **kwargs)
 from src.services.model_capabilities import supports_task
 from src.services.pool_policy import choose_pool_policy
 from src.services.provider_factory import get_provider
@@ -109,6 +124,9 @@ def _doc_to_response(doc: DeploymentDoc) -> DeploymentResponse:
         error=doc.error,
         estimated_remaining_seconds=_estimate_remaining_seconds(doc.status),
         phase_durations=_compute_phase_durations(doc),
+        t_r2_sync_s=doc.t_r2_sync_s,
+        t_model_load_s=doc.t_model_load_s,
+        loaded_from_cache=doc.loaded_from_cache,
         created_at=created_at,
         ready_at=ready_at,
     )
@@ -122,6 +140,13 @@ def _resolve_runpod_key(body: DeploymentCreate, ctx: RequestContext) -> str:
 
 def _is_warm_status(status: str) -> bool:
     return status.upper() not in {"TERMINATED", "DELETED", "FAILED", "STOPPED"}
+
+
+def _has_warm_worker(health: dict) -> bool:
+    workers = health.get("workers") or {}
+    ready = int(workers.get("ready", 0) or 0)
+    idle = int(workers.get("idle", 0) or 0)
+    return ready > 0 or idle > 0
 
 
 def _build_s3_model_url(base_url: str, path_suffix: str) -> str:
@@ -274,9 +299,25 @@ async def create_deployment(
         try:
             endpoints = await provider.list_endpoints(runpod_api_key)
             for ep in endpoints:
-                if ep.get("name") in warm_names and _is_warm_status(ep.get("status", "")):
+                if ep.get("name") not in warm_names:
+                    continue
+                if not _is_warm_status(ep.get("status", "")):
+                    continue
+
+                endpoint_id = ep.get("id")
+                if not endpoint_id:
+                    continue
+
+                health = await provider.check_endpoint_health(endpoint_id, runpod_api_key)
+                if _has_warm_worker(health):
                     warm_endpoint = ep
                     break
+
+                structured_log(
+                    "INFO",
+                    "Warm endpoint skipped due to no ready/idle workers",
+                    metadata={"endpoint_id": endpoint_id, "name": ep.get("name")},
+                )
         except Exception as exc:
             structured_log("WARNING", "Warm discovery failed", metadata={"error": str(exc)})
 

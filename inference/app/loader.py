@@ -27,6 +27,10 @@ def _count_local_files(path: str) -> int:
     return total
 
 
+def _round_s(value: float) -> float:
+    return round(value, 3)
+
+
 def sync_from_s3(s3_url: str, local_path: str) -> bool:
     """
     Sync model from S3 to local path using s5cmd.
@@ -108,11 +112,11 @@ def sync_from_s3(s3_url: str, local_path: str) -> bool:
         return False
 
 
-def load_pipeline_optimized(model_id: str, token: str = None, device: str = "cuda") -> tuple[Any, bool]:
+def load_pipeline_optimized(model_id: str, token: str = None, device: str = "cuda") -> tuple[Any, bool, dict[str, float | bool | None]]:
     """
     Load pipeline with S3 caching and persistent volume support.
 
-    Returns (pipeline, loaded_from_local) tuple.
+    Returns (pipeline, loaded_from_local, timings) tuple.
     loaded_from_local is True when model was synced from R2, False when downloaded from HF.
 
     Cold-start cost path:
@@ -120,7 +124,7 @@ def load_pipeline_optimized(model_id: str, token: str = None, device: str = "cud
       2. S3 cache miss → full S3 sync  → load from disk  (~35-60s)
       3. No S3 config  → HF Hub download (first time) or HF cache hit
     """
-    model_id, use_local = resolve_model_source(model_id)
+    model_id, use_local, t_r2_sync_s, loaded_from_cache = resolve_model_source(model_id)
 
     if not use_local:
         # Speed up HF Hub downloads with hf_transfer (C-based, ~5× faster)
@@ -128,32 +132,46 @@ def load_pipeline_optimized(model_id: str, token: str = None, device: str = "cud
 
     _log("INFO", f"Loading pipeline from: {model_id} (local={use_local})")
     from pipelines.registry import load_pipeline
+    t_model_load_start = time.time()
     pipeline = load_pipeline(model_id=model_id, token=token, device=device)
-    return (pipeline, use_local)
+    t_model_load_s = _round_s(time.time() - t_model_load_start)
+    return (
+        pipeline,
+        use_local,
+        {
+            "t_r2_sync_s": t_r2_sync_s,
+            "t_model_load_s": t_model_load_s,
+            "loaded_from_cache": loaded_from_cache,
+        },
+    )
 
 
-def resolve_model_source(model_id: str) -> tuple[str, bool]:
+def resolve_model_source(model_id: str) -> tuple[str, bool, float | None, bool]:
     """Return the effective model source path, preferring a synced S3 path when available."""
     s3_url = os.environ.get("S3_MODEL_URL")
-    volume_path = "/runpod-volume"
+    volume_path = os.environ.get("MODEL_CACHE_DIR", "/tmp/models")  # FAST-PATH: NVMe ephemeral
 
     model_name_slug = model_id.replace("/", "--")
     local_path = os.path.join(volume_path, model_name_slug)
 
     use_local = False
+    t_r2_sync_s: float | None = None
+    loaded_from_cache = False
     if s3_url:
         _log("INFO", f"S3_MODEL_URL set — attempting R2 sync: {s3_url}")
         t0 = time.time()
         synced = sync_from_s3(s3_url, local_path)
-        elapsed = time.time() - t0
+        elapsed = _round_s(time.time() - t0)
+        t_r2_sync_s = elapsed
         if synced:
             _log("INFO", f"✅ R2 sync done in {elapsed:.1f}s — loading from disk")
             os.environ["TRANSFORMERS_OFFLINE"] = "1"
             os.environ["DIFFUSERS_OFFLINE"] = "1"
             model_id = local_path
             use_local = True
+            loaded_from_cache = True
         else:
             _log("INFO", f"R2 sync skipped/failed after {elapsed:.1f}s — downloading from HuggingFace")
     else:
         _log("INFO", f"No S3_MODEL_URL — downloading from HuggingFace: {model_id}")
-    return model_id, use_local
+    return model_id, use_local, t_r2_sync_s, loaded_from_cache

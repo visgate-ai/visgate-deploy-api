@@ -27,7 +27,6 @@ from src.services.inference_jobs import (
     extract_estimated_cost,
     map_provider_status,
 )
-from src.services.firestore_repo import get_deployment, update_deployment
 from src.services.log_tunnel import append_live_log
 from src.services.provider_factory import get_provider
 from src.services.r2_manifest import add_model_to_manifest, fetch_cached_model_ids, model_s3_url
@@ -43,6 +42,12 @@ def _get_repo():
     else:
         import src.services.firestore_repo as repo
     return repo
+
+def get_deployment(*args, **kwargs):
+    return _get_repo().get_deployment(*args, **kwargs)
+
+def update_deployment(*args, **kwargs):
+    return _get_repo().update_deployment(*args, **kwargs)
 
 
 def get_inference_job(*args, **kwargs):
@@ -344,6 +349,9 @@ async def deployment_ready(
         success = await mark_deployment_ready_and_notify(
             deployment_id,
             endpoint_url=data.endpoint_url,
+            t_r2_sync_s=data.t_r2_sync_s,
+            t_model_load_s=data.t_model_load_s,
+            loaded_from_cache=data.loaded_from_cache,
         )
         return {
             "deployment_id": deployment_id,
@@ -356,6 +364,9 @@ async def deployment_ready(
         status=data.status,
         message=data.message,
         endpoint_url=data.endpoint_url,
+        t_r2_sync_s=data.t_r2_sync_s,
+        t_model_load_s=data.t_model_load_s,
+        loaded_from_cache=data.loaded_from_cache,
     )
     return {
         "deployment_id": deployment_id,
@@ -487,8 +498,7 @@ async def cleanup_endpoint(
     if settings.internal_webhook_secret and provided_secret != settings.internal_webhook_secret:
         raise HTTPException(status_code=403, detail="Invalid internal secret")
 
-    from src.services.firestore_repo import get_firestore_client
-    fs_client = get_firestore_client(settings.gcp_project_id)
+    fs_client = _get_repo().get_firestore_client(settings.gcp_project_id)
     doc = get_deployment(fs_client, settings.firestore_collection_deployments, deployment_id)
     if not doc or not doc.runpod_endpoint_id:
         return {"status": "noop", "reason": "missing_endpoint"}
@@ -543,8 +553,7 @@ async def model_cached(
         )
 
         # Update deployment doc
-        from src.services.firestore_repo import get_firestore_client
-        fs_client = get_firestore_client(settings.gcp_project_id)
+        fs_client = _get_repo().get_firestore_client(settings.gcp_project_id)
         update_deployment(
             fs_client,
             settings.firestore_collection_deployments,

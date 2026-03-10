@@ -162,14 +162,20 @@ class Settings(BaseSettings):
         description="Maximum concurrent workers per endpoint",
     )
     runpod_idle_timeout_seconds: int = Field(
-        default=120,
+        default=300,
         ge=30,
         le=3600,
         description=(
             "Seconds a worker stays alive after its last job. "
-            "120s is a good balance: absorbs burst traffic without burning idle GPU hours. "
+            "300s is a good balance: absorbs burst traffic without burning too many idle GPU hours. "
             "Lower = cheaper but more cold starts; higher = faster burst but more idle cost."
         ),
+    )
+    runpod_idle_timeout_seconds_video: int = Field(
+        default=600,
+        ge=30,
+        le=3600,
+        description="Idle timeout for video workers in seconds to avoid rapid warm-worker eviction.",
     )
     runpod_scaler_type: str = Field(
         default="QUEUE_DELAY",
@@ -311,7 +317,7 @@ class Settings(BaseSettings):
     # API
     rate_limit_requests_per_minute: int = Field(default=100, ge=1, le=1000)
     enable_endpoint_reuse: bool = Field(
-        default=False,
+        default=True,
         description="Reuse ready endpoints for same model/key instead of creating new endpoint",
     )
     stateless_mode: bool = Field(

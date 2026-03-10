@@ -12,7 +12,14 @@ from google.cloud import firestore
 
 from src.core.config import get_settings
 from src.core.errors import RateLimitError, UnauthorizedError
-from src.services.firestore_repo import get_firestore_client
+
+def _get_repo():
+    from src.core.config import get_settings
+    if get_settings().effective_use_memory_repo:
+        import src.services.memory_repo as repo
+    else:
+        import src.services.firestore_repo as repo
+    return repo
 
 security = HTTPBearer(auto_error=False)
 
@@ -29,10 +36,10 @@ class RequestContext:
     hf_token: str | None = None
 
 
-def get_firestore() -> firestore.Client:
+def get_firestore():
     """Return Firestore client for current project."""
     settings = get_settings()
-    return get_firestore_client(settings.gcp_project_id)
+    return _get_repo().get_firestore_client(settings.gcp_project_id)
 
 
 def _check_rate_limit(subject: str, limit: int) -> None:

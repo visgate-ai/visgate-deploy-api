@@ -22,8 +22,8 @@ async def create_serverless_template(
     api_key: str,
     name: str,
     image_name: str,
-    container_disk_in_gb: int = 20,
-    volume_in_gb: int = 0,
+    container_disk_in_gb: int = 50,  # FAST-PATH: Need space for model on root disk
+    volume_in_gb: int = 0,           # FAST-PATH: Strictly no network disk
     docker_args: str = "",
     readme: str = "",
     env: list[dict[str, str]] | None = None,
@@ -301,6 +301,10 @@ class RunpodProvider(BaseInferenceProvider):
 
     async def get_endpoint_health(self, endpoint_url: str, api_key: str) -> dict[str, Any]:
         return await self._endpoint_request("GET", self._endpoint_root(endpoint_url) + "/health", api_key)
+
+    async def check_endpoint_health(self, endpoint_id: str, api_key: str) -> dict[str, Any]:
+        endpoint_url = self.get_run_url(endpoint_id)
+        return await self.get_endpoint_health(endpoint_url, api_key)
 
 # Register the provider
 register_provider("runpod", RunpodProvider())

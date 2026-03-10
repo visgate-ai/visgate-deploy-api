@@ -13,3 +13,5 @@ hf_transfer>=0.1.4
 
 # Image
 Pillow>=10.0.0
+
+boto3==1.36.0

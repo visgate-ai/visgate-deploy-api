@@ -3,3 +3,5 @@ imageio-ffmpeg>=0.5.1
 # WAN T5 text encoder requires sentencepiece and ftfy
 sentencepiece>=0.1.99
 ftfy>=6.1.1
+# Wan2.1 pipeline requires diffusers >= 0.33.1 (WanPipeline added in this release)
+diffusers>=0.33.1

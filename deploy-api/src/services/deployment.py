@@ -92,7 +92,7 @@ def _runtime_hf_model_id(hf_model_id: str) -> str:
 
 
 def _uses_health_probe_readiness(worker_profile: str) -> bool:
-    return worker_profile != "video"
+    return True
 
 
 def _uses_shared_model_cache(worker_profile: str) -> bool:
@@ -103,6 +103,12 @@ def _workers_min(settings, worker_profile: str, workers_max: int) -> int:
     if worker_profile == "video":
         return min(settings.runpod_workers_min_video, workers_max)
     return min(settings.runpod_workers_min, workers_max)
+
+
+def _idle_timeout(settings, worker_profile: str) -> int:
+    if worker_profile == "video":
+        return settings.runpod_idle_timeout_seconds_video
+    return settings.runpod_idle_timeout_seconds
 
 
 def _model_load_wait_timeout_seconds(settings, worker_profile: str) -> int | None:
@@ -352,6 +358,7 @@ async def orchestrate_deployment(
         env = {
             "HF_MODEL_ID": runtime_hf_model_id,
             "VISGATE_DEPLOYMENT_ID": deployment_id,
+            "RETURN_BASE64": "false",
         }
         if doc.task:
             env["TASK"] = doc.task
@@ -430,7 +437,6 @@ async def orchestrate_deployment(
             {
                 "status": "creating_endpoint",
                 "worker_profile": worker_target["profile"],
-                "worker_template_id": worker_target["template_id"],
                 "worker_image": worker_target["image"],
             },
         )
@@ -479,7 +485,7 @@ async def orchestrate_deployment(
                     execution_timeout_ms=execution_timeout_ms,
                     workers_min=_workers_min(settings, worker_target["profile"], workers_max),
                     workers_max=workers_max,
-                    idle_timeout=settings.runpod_idle_timeout_seconds,
+                    idle_timeout=_idle_timeout(settings, worker_target["profile"]),
                     scaler_type=settings.runpod_scaler_type,
                     scaler_value=settings.runpod_scaler_value,
                     volume_in_gb=settings.runpod_volume_size_gb,
@@ -506,7 +512,7 @@ async def orchestrate_deployment(
                     execution_timeout_ms=execution_timeout_ms,
                     workers_min=_workers_min(settings, worker_target["profile"], allowed_workers_max),
                     workers_max=allowed_workers_max,
-                    idle_timeout=settings.runpod_idle_timeout_seconds,
+                    idle_timeout=_idle_timeout(settings, worker_target["profile"]),
                     scaler_type=settings.runpod_scaler_type,
                     scaler_value=settings.runpod_scaler_value,
                     volume_in_gb=settings.runpod_volume_size_gb,
@@ -553,7 +559,7 @@ async def orchestrate_deployment(
                 "gpu_allocated": target_display,
                 "provider": provider_name,
                 "worker_profile": worker_target["profile"],
-                "worker_template_id": worker_target["template_id"],
+                "worker_template_id": dep_template_id,
                 "worker_image": worker_target["image"],
                 "gpu_pool_targeted": target_ids,
             },
@@ -582,7 +588,7 @@ async def orchestrate_deployment(
         # Fallback readiness monitor:
         # If worker webhook fails, probe RunPod /health directly (GET, no job queued).
         monitor_timeout_seconds = 1800  # 30 min — covers GPU cold-start + model download
-        monitor_interval_seconds = 15   # 15s is sufficient; /health is cheap
+        monitor_interval_seconds = 3    # FAST-PATH: aggressive polling to skip artificial network wait
         started_at = asyncio.get_running_loop().time()
         while True:
             latest = get_deployment(client, coll, deployment_id)
@@ -672,6 +678,9 @@ def _inference_example_input(model_id: str) -> dict:
 async def mark_deployment_ready_and_notify(
     deployment_id: str,
     endpoint_url: str | None = None,
+    t_r2_sync_s: float | None = None,
+    t_model_load_s: float | None = None,
+    loaded_from_cache: bool | None = None,
 ) -> bool:
     """
     Called from internal webhook handler: set status=ready, ready_at, then notify user.
@@ -693,6 +702,12 @@ async def mark_deployment_ready_and_notify(
     updates: dict = {"status": "ready", "ready_at": now}
     if resolved_endpoint_url:
         updates["endpoint_url"] = resolved_endpoint_url
+    if t_r2_sync_s is not None:
+        updates["t_r2_sync_s"] = t_r2_sync_s
+    if t_model_load_s is not None:
+        updates["t_model_load_s"] = t_model_load_s
+    if loaded_from_cache is not None:
+        updates["loaded_from_cache"] = loaded_from_cache
     update_deployment(client, coll, deployment_id, updates)
     append_log(
         client,
@@ -723,6 +738,9 @@ async def mark_deployment_ready_and_notify(
         "created_at": created_at,
         "ready_at": now,
         "duration_seconds": duration_seconds,
+        "t_r2_sync_s": t_r2_sync_s,
+        "t_model_load_s": t_model_load_s,
+        "loaded_from_cache": loaded_from_cache,
         "usage_example": {
             "method": "POST",
             "url": resolved_endpoint_url,
@@ -766,6 +784,9 @@ async def update_deployment_phase_from_worker(
     status: str,
     message: str | None = None,
     endpoint_url: str | None = None,
+    t_r2_sync_s: float | None = None,
+    t_model_load_s: float | None = None,
+    loaded_from_cache: bool | None = None,
 ) -> bool:
     """
     Update deployment for worker-reported intermediate/failure phases.
@@ -778,7 +799,13 @@ async def update_deployment_phase_from_worker(
         return False
 
     if status == "ready":
-        return await mark_deployment_ready_and_notify(deployment_id, endpoint_url=endpoint_url)
+        return await mark_deployment_ready_and_notify(
+            deployment_id,
+            endpoint_url=endpoint_url,
+            t_r2_sync_s=t_r2_sync_s,
+            t_model_load_s=t_model_load_s,
+            loaded_from_cache=loaded_from_cache,
+        )
 
     if doc.status == "ready" and status != "failed":
         return True

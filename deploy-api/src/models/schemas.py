@@ -107,6 +107,9 @@ class DeploymentResponse(BaseModel):
     error: str | None = None
     estimated_remaining_seconds: int | None = None
     phase_durations: dict[str, float] = Field(default_factory=dict)
+    t_r2_sync_s: float | None = None
+    t_model_load_s: float | None = None
+    loaded_from_cache: bool | None = None
     created_at: datetime
     ready_at: datetime | None = None
 
@@ -199,6 +202,9 @@ class DeploymentReadyPayload(BaseModel):
     status: Literal["downloading_model", "loading_model", "ready", "failed"] = "ready"
     message: str | None = None
     endpoint_url: str | None = None
+    t_r2_sync_s: float | None = None
+    t_model_load_s: float | None = None
+    loaded_from_cache: bool | None = None
 
 
 InferenceJobStatus = Literal[

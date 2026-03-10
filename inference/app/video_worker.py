@@ -25,7 +25,8 @@ from app.config import (
     VISGATE_WEBHOOK,
 )
 from app.loader import resolve_model_source
-from app.runtime_common import log_tunnel, post_json, request_cleanup, upload_bytes
+from app.runtime_common import log_tunnel, post_json, request_cleanup, upload_bytes, download_to_tempfile
+from PIL import Image
 
 _pipeline: Optional[Any] = None
 _load_error: Optional[str] = None
@@ -41,12 +42,24 @@ def _runtime_video_model_id(model_id: str) -> str:
     return aliases.get(model_id, model_id)
 
 
-def _notify_orchestrator(status: str, message: str | None = None) -> None:
+def _notify_orchestrator(
+    status: str,
+    message: str | None = None,
+    timings: dict[str, float | bool | None] | None = None,
+) -> None:
     if not VISGATE_WEBHOOK or not VISGATE_WEBHOOK.strip():
         return
     payload = {"status": status}
     if message:
         payload["message"] = message
+    if timings:
+        payload.update(
+            {
+                "t_r2_sync_s": timings.get("t_r2_sync_s"),
+                "t_model_load_s": timings.get("t_model_load_s"),
+                "loaded_from_cache": timings.get("loaded_from_cache"),
+            }
+        )
     for attempt in range(5):
         try:
             post_json(VISGATE_WEBHOOK, payload)
@@ -68,13 +81,28 @@ def _load_model_background() -> None:
 
     try:
         effective_model_id = _runtime_video_model_id(HF_MODEL_ID)
-        model_source, _ = resolve_model_source(effective_model_id)
+        model_source, _, t_r2_sync_s, loaded_from_cache = resolve_model_source(effective_model_id)
         log_tunnel("INFO", f"Loading video model: requested={HF_MODEL_ID} runtime={effective_model_id}")
         _notify_orchestrator("loading_model", "Video model loading started")
+        t0 = time.time()
         _pipeline = DiffusionPipeline.from_pretrained(model_source, torch_dtype=_torch_dtype(), token=HF_TOKEN)
+        load_elapsed = time.time() - t0
         if DEVICE.startswith("cuda"):
+            t1 = time.time()
             _pipeline.to(DEVICE)
-        _notify_orchestrator("ready", "Video model loaded successfully")
+            gpu_elapsed = time.time() - t1
+            log_tunnel("INFO", f"Pipeline to GPU: {gpu_elapsed:.1f}s")
+            load_elapsed += gpu_elapsed
+        log_tunnel("INFO", f"Video pipeline loaded in {load_elapsed:.1f}s (from_pretrained)")
+        _notify_orchestrator(
+            "ready",
+            "Video model loaded successfully",
+            timings={
+                "t_r2_sync_s": round(t_r2_sync_s, 3) if t_r2_sync_s is not None else None,
+                "t_model_load_s": round(load_elapsed, 3),
+                "loaded_from_cache": loaded_from_cache,
+            },
+        )
         log_tunnel("INFO", "Video model loaded successfully")
     except Exception as exc:
         _load_error = str(exc)

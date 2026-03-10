@@ -46,20 +46,13 @@ def infer_worker_profile(model_id: str, task: str | None = None) -> str:
 def resolve_worker_target(settings: Settings, model_id: str, task: str | None = None) -> dict[str, Any]:
     profile = infer_worker_profile(model_id, task)
     if profile == AUDIO_PROFILE:
-        template_id = settings.runpod_template_id_audio or settings.runpod_template_id
         image = settings.docker_image_audio or settings.docker_image
     elif profile == VIDEO_PROFILE:
-        template_id = settings.runpod_template_id_video or settings.runpod_template_id
         image = settings.docker_image_video or settings.docker_image
     else:
-        template_id = settings.runpod_template_id_image or settings.runpod_template_id
         image = settings.docker_image_image or settings.docker_image
-
-    if not template_id:
-        raise ValueError(f"Missing RunPod template for worker profile '{profile}'")
 
     return {
         "profile": profile,
-        "template_id": template_id,
         "image": image,
     }

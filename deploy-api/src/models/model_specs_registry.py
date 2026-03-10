@@ -88,6 +88,10 @@ MODEL_SPECS_REGISTRY: dict[str, dict[str, Any]] = {
         "gpu_memory_gb": 8,
         "tasks": ["text_to_speech"],
     },
+    "cvssp/audioldm2": {
+        "gpu_memory_gb": 8,
+        "tasks": ["text_to_audio", "text_to_speech"],
+    },
     "suno/bark": {
         "gpu_memory_gb": 16,
         "tasks": ["text_to_speech"],

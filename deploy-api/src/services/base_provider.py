@@ -104,3 +104,8 @@ class BaseInferenceProvider(ABC):
     async def get_endpoint_health(self, endpoint_url: str, api_key: str) -> dict[str, Any]:
         """Return provider endpoint health information."""
         pass
+
+    @abstractmethod
+    async def check_endpoint_health(self, endpoint_id: str, api_key: str) -> dict[str, Any]:
+        """Return provider endpoint health information by endpoint id."""
+        pass

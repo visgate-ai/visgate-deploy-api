@@ -2,6 +2,8 @@
 
 import base64
 import io
+import os
+import uuid
 from typing import Any, Optional
 
 import torch
@@ -70,11 +72,14 @@ class SDXLPipeline(BasePipeline):
         if not images:
             return {"error": "No image generated", "model_id": self.model_id}
         img = images[0]
-        buf = io.BytesIO()
-        img.save(buf, format="PNG")
-        b64 = base64.b64encode(buf.getvalue()).decode("ascii")
+        
+        tmp_path = f"/tmp/{uuid.uuid4().hex}.png"
+        img.save(tmp_path, format="PNG")
+        
         return {
-            "image_base64": b64,
+            "file_path": tmp_path,
+            "file_extension": ".png",
+            "content_type": "image/png",
             "model_id": self.model_id,
             "seed": seed,
             "height": height,

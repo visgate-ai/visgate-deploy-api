@@ -1,8 +1,9 @@
+import os
 """
 Runpod serverless worker: load HF model at startup, notify orchestrator when ready, handle inference jobs.
 """
 
-import os
+
 import sys
 import threading
 import time
@@ -95,6 +96,7 @@ def _job_s3_config(job: dict[str, Any], job_input: dict[str, Any]) -> dict[str, 
 
 def _artifact_target(
     s3_config: dict[str, Any] | None,
+    ext: str = ".png",
 ) -> tuple[str | None, str | None, str | None, str | None, str | None]:
     if s3_config:
         bucket_name = s3_config.get("bucketName")
@@ -102,37 +104,35 @@ def _artifact_target(
         if not bucket_name or not endpoint_url:
             return None, None, None, None, None
         key_prefix = (s3_config.get("keyPrefix") or DEFAULT_OUTPUT_KEY_PREFIX).strip("/")
-        object_key = f"{key_prefix}/{int(time.time())}_{uuid.uuid4().hex}.png"
+        object_key = f"{key_prefix}/{int(time.time())}_{uuid.uuid4().hex}{ext}"
         upload_target = f"s3://{bucket_name}/{object_key}"
         object_url = f"{endpoint_url.rstrip('/')}/{bucket_name}/{object_key}"
         return upload_target, bucket_name, endpoint_url, object_key, object_url
     if OUTPUT_S3_URL:
-        key_name = f"visgate/{int(time.time())}_{uuid.uuid4().hex}.png"
+        key_name = f"visgate/{int(time.time())}_{uuid.uuid4().hex}{ext}"
         return f"{OUTPUT_S3_URL.rstrip('/')}/{key_name}", None, None, key_name, None
     return None, None, None, None, None
 
 
-def _maybe_upload_output(image_base64: str, job: dict[str, Any], job_input: dict[str, Any]) -> Optional[dict[str, Any]]:
-    """Upload base64 output to S3 via s5cmd and return normalized artifact metadata."""
-    s3_config = _job_s3_config(job, job_input)
-    upload_target, bucket_name, endpoint_url, object_key, object_url = _artifact_target(s3_config)
-    if not upload_target:
-        return None
-    import base64
-    import os
+
+def _upload_file_to_s3(
+    local_path: str,
+    ext: str,
+    content_type: str,
+    job: dict[str, Any],
+    job_input: dict[str, Any]
+) -> Optional[dict[str, Any]]:
+    return upload_file_boto3(local_path, job, job_input, content_type=content_type, extension=ext)
+
     import subprocess
-    import tempfile
+    
+    file_size = os.path.getsize(local_path)
     try:
         subprocess.run(["s5cmd", "version"], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     except Exception:
         return None
 
-    tmp_path = ""
     try:
-        raw_bytes = base64.b64decode(image_base64)
-        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
-            tmp.write(raw_bytes)
-            tmp_path = tmp.name
         env = os.environ.copy()
         cmd = ["s5cmd"]
         if s3_config:
@@ -141,7 +141,7 @@ def _maybe_upload_output(image_base64: str, job: dict[str, Any], job_input: dict
             env["AWS_ENDPOINT_URL"] = s3_config.get("endpointUrl", "")
             if s3_config.get("endpointUrl"):
                 cmd.extend(["--endpoint-url", s3_config["endpointUrl"]])
-        cmd.extend(["cp", tmp_path, upload_target])
+        cmd.extend(["cp", local_path, upload_target])
         subprocess.run(cmd, check=True, env=env)
         url = object_url or upload_target
         if CDN_BASE_URL and object_key:
@@ -151,20 +151,19 @@ def _maybe_upload_output(image_base64: str, job: dict[str, Any], job_input: dict
             "endpoint_url": endpoint_url,
             "key": object_key,
             "url": url,
-            "content_type": "image/png",
-            "bytes": len(raw_bytes),
+            "content_type": content_type,
+            "bytes": file_size,
         }
-    except Exception:
+    except Exception as e:
+        print(f"[worker] S3 Upload failed: {e}", flush=True)
         return None
-    finally:
-        try:
-            if tmp_path and os.path.exists(tmp_path):
-                os.remove(tmp_path)
-        except Exception:
-            pass
 
 
-def _notify_orchestrator(status: str, message: str | None = None) -> None:
+def _notify_orchestrator(
+    status: str,
+    message: str | None = None,
+    timings: dict[str, float | bool | None] | None = None,
+) -> None:
     """POST worker lifecycle status to orchestrator internal webhook."""
     if not VISGATE_WEBHOOK or not VISGATE_WEBHOOK.strip():
         return
@@ -179,6 +178,14 @@ def _notify_orchestrator(status: str, message: str | None = None) -> None:
     payload = {"status": status}
     if message:
         payload["message"] = message
+    if timings:
+        payload.update(
+            {
+                "t_r2_sync_s": timings.get("t_r2_sync_s"),
+                "t_model_load_s": timings.get("t_model_load_s"),
+                "loaded_from_cache": timings.get("loaded_from_cache"),
+            }
+        )
     data = json.dumps(payload).encode("utf-8")
     headers = {"Content-Type": "application/json"}
     if VISGATE_INTERNAL_SECRET:
@@ -214,11 +221,11 @@ def _load_model_background() -> None:
     _log_tunnel("INFO", f"Loading model: {HF_MODEL_ID}")
     try:
         _notify_orchestrator("loading_model", "Model loading started")
-        _pipeline, _ = load_pipeline(model_id=HF_MODEL_ID, token=HF_TOKEN, device=DEVICE)
+        _pipeline, _, timings = load_pipeline(model_id=HF_MODEL_ID, token=HF_TOKEN, device=DEVICE)
         print("[worker] Model loaded successfully", flush=True)
         _log_tunnel("INFO", "Model loaded successfully")
         # Notify orchestrator
-        _notify_orchestrator("ready", "Model loaded successfully")
+        _notify_orchestrator("ready", "Model loaded successfully", timings=timings)
     except Exception as e:
         import traceback
         _load_error = str(e)
@@ -238,7 +245,7 @@ def handler(job: dict[str, Any]) -> dict[str, Any]:
     
     # Allow debug env dump
     if job_input.get("debug") is True:
-        import os
+
         safe_env = {}
         for k, v in os.environ.items():
             if any(s in k.upper() for s in ("TOKEN", "SECRET", "KEY", "AUTH")):
@@ -263,9 +270,19 @@ def handler(job: dict[str, Any]) -> dict[str, Any]:
         if _load_error:
             return {"error": f"Model load failed: {_load_error}", "status": "failed"}
 
+
     prompt = job_input.get("prompt")
-    if not prompt or not str(prompt).strip():
-        return {"error": "Missing or empty 'prompt' in input"}
+    if not prompt and not job_input.get("input_image_url"):
+        return {"error": "Missing 'prompt' or 'input_image_url'"}
+
+    kwargs = {}
+    if job_input.get("input_image_url"):
+        try:
+            tmp_img = download_to_tempfile(job_input["input_image_url"], ".png")
+            kwargs["image"] = Image.open(tmp_img).convert("RGB")
+        except Exception as e:
+            return {"error": f"Failed to download input image: {e}"}
+
     try:
         global _last_request_at, _failure_count
         _last_request_at = time.time()
@@ -278,6 +295,7 @@ def handler(job: dict[str, Any]) -> dict[str, Any]:
             height=job_input.get("height"),
             width=job_input.get("width"),
             seed=job_input.get("seed"),
+            **kwargs,
         )
         if result.get("image_base64"):
             upload_info = _maybe_upload_output(result["image_base64"], job, job_input)
