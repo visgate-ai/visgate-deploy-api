@@ -43,6 +43,7 @@ All fields except `input.prompt` are optional. In production, deploy-api stages 
 
 GitHub Actions publishes separate `latest` images for image, audio, and video worker profiles before the live smoke workflow runs.
 The smoke workflow verifies webhook delivery from Cloud Run logs instead of depending on an inbound tunnel receiver.
+That keeps the CI smoke path deterministic on GitHub-hosted runners while still validating webhook success end to end from the sender side.
 
 ## Job output
 

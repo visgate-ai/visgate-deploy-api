@@ -271,7 +271,6 @@ def _deployment_and_job(modality: str) -> dict[str, Any]:
     )
     status_events = _stop_sse_capture(status_capture)
     log_events = _stop_sse_capture(logs_capture)
-    deployment_webhook = _wait_for_webhook(deployment_webhook_path, timeout_seconds=120)
 
     result: dict[str, Any] = {
         "modality": modality,
