@@ -47,12 +47,16 @@ def resolve_worker_target(settings: Settings, model_id: str, task: str | None = 
     profile = infer_worker_profile(model_id, task)
     if profile == AUDIO_PROFILE:
         image = settings.docker_image_audio or settings.docker_image
+        template_id = settings.runpod_template_id_audio or settings.runpod_template_id
     elif profile == VIDEO_PROFILE:
         image = settings.docker_image_video or settings.docker_image
+        template_id = settings.runpod_template_id_video or settings.runpod_template_id
     else:
         image = settings.docker_image_image or settings.docker_image
+        template_id = settings.runpod_template_id_image or settings.runpod_template_id
 
     return {
         "profile": profile,
+        "template_id": template_id,
         "image": image,
     }
