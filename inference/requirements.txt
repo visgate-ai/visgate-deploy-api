@@ -1,17 +1,16 @@
-# Runpod serverless
 runpod>=1.6.0
-
-# Hugging Face diffusion
-torch>=2.1.0
-diffusers>=0.33.0,<0.34.0
+diffusers>=0.33.1
 transformers>=4.44.2,<5.0.0
-accelerate>=0.25.0
+accelerate>=0.33.0
 safetensors>=0.4.0
-
-# Fast HF Hub downloads (C extension, ~5x faster than requests)
 hf_transfer>=0.1.4
-
-# Image
-Pillow>=10.0.0
-
 boto3==1.36.0
+torch>=2.4.0
+torchaudio>=2.4.0
+imageio>=2.34.0
+imageio-ffmpeg>=0.5.1
+librosa>=0.10.1
+Pillow>=10.0.0
+sentencepiece>=0.1.99
+soundfile>=0.12.1
+ftfy>=6.1.1

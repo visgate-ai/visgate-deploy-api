@@ -1,162 +1,45 @@
+"""Universal RunPod worker supporting text-to-image, video, and audio tasks via unified entry point."""
+
+from __future__ import annotations
+
+import base64
+import io
 import os
-"""
-Runpod serverless worker: load HF model at startup, notify orchestrator when ready, handle inference jobs.
-"""
-
-
 import sys
+import tempfile
 import threading
 import time
-import uuid
 from typing import Any, Optional
+
+import numpy as np
+import imageio.v2 as imageio
+import soundfile as sf
+import torch
 
 # Add project root for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app.config import (
+    CLEANUP_FAILURE_THRESHOLD,
+    CLEANUP_IDLE_TIMEOUT_SECONDS,
     DEFAULT_GUIDANCE_SCALE,
     DEFAULT_NUM_INFERENCE_STEPS,
     DEVICE,
     HF_MODEL_ID,
     HF_TOKEN,
+    MODEL_LOAD_WAIT_TIMEOUT_SECONDS,
     VISGATE_WEBHOOK,
-    VISGATE_LOG_TUNNEL,
-    VISGATE_INTERNAL_SECRET,
-    VISGATE_DEPLOYMENT_ID,
-    CLEANUP_FAILURE_THRESHOLD,
-    CLEANUP_IDLE_TIMEOUT_SECONDS,
-    OUTPUT_S3_URL,
-    CDN_BASE_URL,
-    RETURN_BASE64,
-    DEFAULT_OUTPUT_KEY_PREFIX,
-    RUNPOD_API_KEY,
 )
-from app.loader import load_pipeline_optimized as load_pipeline
+from app.loader import resolve_model_source
+from app.runtime_common import download_to_tempfile, log_tunnel, post_json, request_cleanup, upload_bytes
+from app.task_detector import detect_task
+from PIL import Image
 
-
-# Global pipeline (loaded once at startup)
 _pipeline: Optional[Any] = None
 _load_error: Optional[str] = None
 _last_request_at: float = 0.0
 _failure_count: int = 0
-
-
-def _mask_sensitive(text: str) -> str:
-    if not text:
-        return text
-    for token in ("hf_", "rpa_", "sk_", "api_key", "token", "secret"):
-        if token in text.lower():
-            return "***REDACTED***"
-    return text
-
-
-def _post_json(url: str, payload: dict[str, Any]) -> None:
-    import json
-    import urllib.request
-
-    headers = {"Content-Type": "application/json"}
-    if VISGATE_INTERNAL_SECRET:
-        headers["X-Visgate-Internal-Secret"] = VISGATE_INTERNAL_SECRET
-    data = json.dumps(payload).encode("utf-8")
-    req = urllib.request.Request(url, data=data, headers=headers, method="POST")
-    with urllib.request.urlopen(req, timeout=10):
-        return
-
-
-def _log_tunnel(level: str, message: str) -> None:
-    if not VISGATE_LOG_TUNNEL or not VISGATE_LOG_TUNNEL.strip():
-        return
-    try:
-        _post_json(VISGATE_LOG_TUNNEL, {"level": level, "message": _mask_sensitive(message)})
-    except Exception:
-        return
-
-
-def _request_cleanup(reason: str) -> None:
-    if not VISGATE_DEPLOYMENT_ID or not VISGATE_WEBHOOK:
-        return
-    cleanup_url = VISGATE_WEBHOOK.replace("/deployment-ready/", "/cleanup/")
-    payload: dict = {"reason": reason}
-    if RUNPOD_API_KEY:
-        # Include the key so the API can delete the endpoint from any Cloud Run instance
-        # (eliminates the in-memory secret_cache multi-instance race).
-        payload["runpod_api_key"] = RUNPOD_API_KEY
-    try:
-        _post_json(cleanup_url, payload)
-    except Exception:
-        return
-
-
-def _job_s3_config(job: dict[str, Any], job_input: dict[str, Any]) -> dict[str, Any] | None:
-    raw = job.get("s3Config") or job_input.get("s3Config")
-    if not isinstance(raw, dict) or not raw:
-        return None
-    return raw
-
-
-def _artifact_target(
-    s3_config: dict[str, Any] | None,
-    ext: str = ".png",
-) -> tuple[str | None, str | None, str | None, str | None, str | None]:
-    if s3_config:
-        bucket_name = s3_config.get("bucketName")
-        endpoint_url = s3_config.get("endpointUrl")
-        if not bucket_name or not endpoint_url:
-            return None, None, None, None, None
-        key_prefix = (s3_config.get("keyPrefix") or DEFAULT_OUTPUT_KEY_PREFIX).strip("/")
-        object_key = f"{key_prefix}/{int(time.time())}_{uuid.uuid4().hex}{ext}"
-        upload_target = f"s3://{bucket_name}/{object_key}"
-        object_url = f"{endpoint_url.rstrip('/')}/{bucket_name}/{object_key}"
-        return upload_target, bucket_name, endpoint_url, object_key, object_url
-    if OUTPUT_S3_URL:
-        key_name = f"visgate/{int(time.time())}_{uuid.uuid4().hex}{ext}"
-        return f"{OUTPUT_S3_URL.rstrip('/')}/{key_name}", None, None, key_name, None
-    return None, None, None, None, None
-
-
-
-def _upload_file_to_s3(
-    local_path: str,
-    ext: str,
-    content_type: str,
-    job: dict[str, Any],
-    job_input: dict[str, Any]
-) -> Optional[dict[str, Any]]:
-    return upload_file_boto3(local_path, job, job_input, content_type=content_type, extension=ext)
-
-    import subprocess
-    
-    file_size = os.path.getsize(local_path)
-    try:
-        subprocess.run(["s5cmd", "version"], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    except Exception:
-        return None
-
-    try:
-        env = os.environ.copy()
-        cmd = ["s5cmd"]
-        if s3_config:
-            env["AWS_ACCESS_KEY_ID"] = s3_config.get("accessId", "")
-            env["AWS_SECRET_ACCESS_KEY"] = s3_config.get("accessSecret", "")
-            env["AWS_ENDPOINT_URL"] = s3_config.get("endpointUrl", "")
-            if s3_config.get("endpointUrl"):
-                cmd.extend(["--endpoint-url", s3_config["endpointUrl"]])
-        cmd.extend(["cp", local_path, upload_target])
-        subprocess.run(cmd, check=True, env=env)
-        url = object_url or upload_target
-        if CDN_BASE_URL and object_key:
-            url = f"{CDN_BASE_URL.rstrip('/')}/{object_key}"
-        return {
-            "bucket_name": bucket_name,
-            "endpoint_url": endpoint_url,
-            "key": object_key,
-            "url": url,
-            "content_type": content_type,
-            "bytes": file_size,
-        }
-    except Exception as e:
-        print(f"[worker] S3 Upload failed: {e}", flush=True)
-        return None
+_task_kind: str = "text2img"
 
 
 def _notify_orchestrator(
@@ -164,18 +47,9 @@ def _notify_orchestrator(
     message: str | None = None,
     timings: dict[str, float | bool | None] | None = None,
 ) -> None:
-    """POST worker lifecycle status to orchestrator internal webhook."""
     if not VISGATE_WEBHOOK or not VISGATE_WEBHOOK.strip():
         return
-    
-    import json
-    import time
-    import urllib.request
-    import urllib.error
-
-    print(f"[worker] Sending status={status} to {VISGATE_WEBHOOK}...", flush=True)
-
-    payload = {"status": status}
+    payload: dict[str, Any] = {"status": status}
     if message:
         payload["message"] = message
     if timings:
@@ -186,96 +60,84 @@ def _notify_orchestrator(
                 "loaded_from_cache": timings.get("loaded_from_cache"),
             }
         )
-    data = json.dumps(payload).encode("utf-8")
-    headers = {"Content-Type": "application/json"}
-    if VISGATE_INTERNAL_SECRET:
-        headers["X-Visgate-Internal-Secret"] = VISGATE_INTERNAL_SECRET
-    req = urllib.request.Request(VISGATE_WEBHOOK, data=data, headers=headers, method="POST")
-    
-    for attempt in range(3):
+    for attempt in range(5):
         try:
-            with urllib.request.urlopen(req, timeout=10) as resp:
-                if 200 <= resp.status < 300:
-                    print("[worker] Webhook delivered successfully", flush=True)
-                    return
-                print(f"[worker] Webhook returned status {resp.status}", flush=True)
-        except urllib.error.HTTPError as e:
-             print(f"[worker] Webhook failed (attempt {attempt+1}): HTTP {e.code} {e.reason}", flush=True)
-        except Exception as e:
-            print(f"[worker] Webhook failed (attempt {attempt+1}): {e}", flush=True)
-        
-        if attempt < 2:
-            time.sleep(2 ** attempt)
+            post_json(VISGATE_WEBHOOK, payload)
+            return
+        except Exception:
+            if attempt < 4:
+                time.sleep(2 ** attempt)
 
-    print("[worker] ERROR: Failed to notify orchestrator after retries", flush=True)
+
+def _torch_dtype() -> torch.dtype:
+    if DEVICE.startswith("cuda") and torch.cuda.is_available() and torch.cuda.is_bf16_supported():
+        return torch.bfloat16
+    return torch.float16 if DEVICE.startswith("cuda") else torch.float32
+
+
+def _runtime_video_model_id(model_id: str) -> str:
+    aliases = {
+        "Wan-AI/Wan2.1-T2V-1.3B": "Wan-AI/Wan2.1-T2V-1.3B-Diffusers",
+        "Wan-AI/Wan2.1-T2V-14B": "Wan-AI/Wan2.1-T2V-14B-Diffusers",
+    }
+    return aliases.get(model_id, model_id)
 
 
 def _load_model_background() -> None:
-    global _pipeline, _load_error
-    if not HF_MODEL_ID or not HF_MODEL_ID.strip():
-        _load_error = "HF_MODEL_ID environment variable is required"
-        print(f"[worker] ERROR: {_load_error}", flush=True)
-        return
+    global _pipeline, _load_error, _task_kind
 
-    print(f"[worker] Loading model in background: {HF_MODEL_ID}", flush=True)
-    _log_tunnel("INFO", f"Loading model: {HF_MODEL_ID}")
     try:
-        _notify_orchestrator("loading_model", "Model loading started")
-        _pipeline, _, timings = load_pipeline(model_id=HF_MODEL_ID, token=HF_TOKEN, device=DEVICE)
-        print("[worker] Model loaded successfully", flush=True)
-        _log_tunnel("INFO", "Model loaded successfully")
-        # Notify orchestrator
-        _notify_orchestrator("ready", "Model loaded successfully", timings=timings)
-    except Exception as e:
+        _task_kind = detect_task(HF_MODEL_ID, os.environ.get("TASK", ""))
+        log_tunnel("INFO", f"Detected task: {_task_kind} for model: {HF_MODEL_ID}")
+
+        effective_model_id = _runtime_video_model_id(HF_MODEL_ID) if _task_kind == "text2video" else HF_MODEL_ID
+        model_source, use_local, t_r2_sync_s, loaded_from_cache = resolve_model_source(effective_model_id)
+
+        _notify_orchestrator("loading_model", f"Model loading started ({_task_kind})")
+        t0 = time.time()
+
+        if _task_kind == "text2img":
+            from pipelines.registry import load_pipeline
+            _pipeline = load_pipeline(model_id=effective_model_id, token=HF_TOKEN, device=DEVICE)
+        
+        elif _task_kind == "text2video":
+            from diffusers import DiffusionPipeline
+            _pipeline = DiffusionPipeline.from_pretrained(model_source, torch_dtype=_torch_dtype(), token=HF_TOKEN)
+            if DEVICE.startswith("cuda"):
+                _pipeline.to(DEVICE)
+                
+        elif _task_kind in ("speech_to_text", "text_to_speech"):
+            from transformers import pipeline
+            pipeline_task = "automatic-speech-recognition" if _task_kind == "speech_to_text" else "text-to-audio"
+            _pipeline = pipeline(pipeline_task, model=model_source, token=HF_TOKEN, device=0 if DEVICE.startswith("cuda") else -1)
+            
+        load_elapsed = time.time() - t0
+        log_tunnel("INFO", f"Pipeline loaded successfully in {load_elapsed:.1f}s")
+        _notify_orchestrator(
+            "ready",
+            "Model loaded successfully",
+            timings={
+                "t_r2_sync_s": round(t_r2_sync_s, 3) if t_r2_sync_s is not None else None,
+                "t_model_load_s": round(load_elapsed, 3),
+                "loaded_from_cache": loaded_from_cache,
+            },
+        )
+    except Exception as exc:
         import traceback
-        _load_error = str(e)
-        print(f"[worker] Failed to load model: {e}", flush=True)
-        _log_tunnel("ERROR", f"Model load failed: {e}")
+        _load_error = str(exc)
+        log_tunnel("ERROR", f"Model load failed: {exc}")
         _notify_orchestrator("failed", _load_error)
-        _request_cleanup("startup_failure")
+        request_cleanup("startup_failure")
         traceback.print_exc()
 
 
-def handler(job: dict[str, Any]) -> dict[str, Any]:
-    """
-    Runpod job handler.
-    """
-    global _pipeline, _load_error
-    job_input = job.get("input") or {}
-    
-    # Allow debug env dump
-    if job_input.get("debug") is True:
-
-        safe_env = {}
-        for k, v in os.environ.items():
-            if any(s in k.upper() for s in ("TOKEN", "SECRET", "KEY", "AUTH")):
-                safe_env[k] = "***REDACTED***"
-            else:
-                safe_env[k] = v
-        return {
-            "env": safe_env,
-            "status": "ok",
-            "pipeline_loaded": _pipeline is not None,
-            "HF_MODEL_ID_PYTHON": HF_MODEL_ID,
-            "load_error": _load_error,
-        }
-
-    if _pipeline is None:
-        # Wait up to 270s for model to finish loading instead of immediately failing
-        wait_start = time.time()
-        while _pipeline is None and _load_error is None:
-            if time.time() - wait_start > 270:
-                return {"error": "Model failed to load within timeout.", "status": "loading"}
-            time.sleep(2)
-        if _load_error:
-            return {"error": f"Model load failed: {_load_error}", "status": "failed"}
-
-
+def _handle_image(job: dict[str, Any], job_input: dict[str, Any]) -> dict[str, Any]:
     prompt = job_input.get("prompt")
     if not prompt and not job_input.get("input_image_url"):
         return {"error": "Missing 'prompt' or 'input_image_url'"}
 
     kwargs = {}
+    tmp_img = None
     if job_input.get("input_image_url"):
         try:
             tmp_img = download_to_tempfile(job_input["input_image_url"], ".png")
@@ -284,12 +146,8 @@ def handler(job: dict[str, Any]) -> dict[str, Any]:
             return {"error": f"Failed to download input image: {e}"}
 
     try:
-        global _last_request_at, _failure_count
-        _last_request_at = time.time()
-        _log_tunnel("INFO", "Inference started")
-        started_at = time.time()
         result = _pipeline.run(
-            prompt=str(prompt).strip(),
+            prompt=str(prompt) if prompt else None,
             num_inference_steps=int(job_input.get("num_inference_steps", DEFAULT_NUM_INFERENCE_STEPS)),
             guidance_scale=float(job_input.get("guidance_scale", DEFAULT_GUIDANCE_SCALE)),
             height=job_input.get("height"),
@@ -297,55 +155,179 @@ def handler(job: dict[str, Any]) -> dict[str, Any]:
             seed=job_input.get("seed"),
             **kwargs,
         )
+        # S3 enforced
         if result.get("image_base64"):
-            upload_info = _maybe_upload_output(result["image_base64"], job, job_input)
-            if upload_info:
-                result["artifact"] = upload_info
-                if RETURN_BASE64.lower() != "true":
-                    result.pop("image_base64", None)
-        result["execution_duration_ms"] = max(int((time.time() - started_at) * 1000), 0)
-        _log_tunnel("INFO", "Inference completed")
-        _failure_count = 0
+            data = base64.b64decode(result["image_base64"])
+            artifact = upload_bytes(data, job, job_input, content_type="image/png", extension="png")
+            if artifact:
+                result["artifact"] = artifact
+            result.pop("image_base64", None)  # Force remove base64
         return result
-    except Exception as e:
+    finally:
+        if tmp_img and os.path.exists(tmp_img):
+            os.remove(tmp_img)
+
+
+def _handle_video(job: dict[str, Any], job_input: dict[str, Any]) -> dict[str, Any]:
+    prompt = job_input.get("prompt")
+    if not prompt:
+        return {"error": "Missing or empty 'prompt' in input", "status": "failed"}
+
+    output = _pipeline(
+        prompt=str(prompt),
+        num_inference_steps=int(job_input.get("num_inference_steps", 16)),
+        guidance_scale=float(job_input.get("guidance_scale", 7.5)),
+        num_frames=int(job_input.get("num_frames", 16)),
+    )
+
+    # Simplified frame extraction
+    frames_raw = None
+    if hasattr(output, "frames") and output.frames is not None:
+        frames_raw = output.frames
+    elif isinstance(output, dict) and output.get("frames") is not None:
+        frames_raw = output["frames"]
+    elif hasattr(output, "images") and output.images is not None:
+        frames_raw = output.images
+
+    if frames_raw is None:
+        raise RuntimeError("Video pipeline returned no frames")
+
+    if isinstance(frames_raw, np.ndarray):
+        if frames_raw.ndim == 5:
+            frames_raw = frames_raw[0]
+        arrays = [frames_raw[i] for i in range(len(frames_raw))]
+    else:
+        # Fallback list handling
+        if isinstance(frames_raw, list) and isinstance(frames_raw[0], list):
+            frames_raw = frames_raw[0]
+        arrays = [np.array(f.convert("RGB")) if hasattr(f, "convert") else np.asarray(f) for f in frames_raw]
+
+    result_frames = []
+    for arr in arrays:
+        arr = np.asarray(arr)
+        if arr.dtype != np.uint8:
+            arr = (arr * 255 if arr.max() <= 1.0 else arr).clip(0, 255).astype(np.uint8)
+        result_frames.append(arr)
+
+    with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as tmp:
+        imageio.mimwrite(tmp.name, result_frames, fps=int(job_input.get("fps", 8)))
+        tmp.flush()
+        with open(tmp.name, "rb") as fh:
+            video_bytes = fh.read()
+
+    artifact = upload_bytes(video_bytes, job, job_input, content_type="video/mp4", extension="mp4")
+    os.remove(tmp.name)
+
+    payload: dict[str, Any] = {
+        "model_id": HF_MODEL_ID,
+        "frame_count": len(result_frames),
+    }
+    if artifact:
+        payload["artifact"] = artifact
+    return payload
+
+
+def _handle_audio(job: dict[str, Any], job_input: dict[str, Any]) -> dict[str, Any]:
+    if _task_kind == "text_to_speech":
+        text = job_input.get("text") or job_input.get("prompt")
+        if not text:
+            return {"error": "Missing 'text' or 'prompt' in input", "status": "failed"}
+
+        output = _pipeline(str(text))
+        audio = output.get("audio")
+        sampling_rate = int(output.get("sampling_rate", 22050))
+        if audio is None:
+            return {"error": "Audio pipeline returned no audio", "status": "failed"}
+
+        buffer = io.BytesIO()
+        sf.write(buffer, audio, sampling_rate, format="WAV")
+        raw_bytes = buffer.getvalue()
+        artifact = upload_bytes(raw_bytes, job, job_input, content_type="audio/wav", extension="wav")
+        return {
+            "model_id": HF_MODEL_ID,
+            "task": "text_to_speech",
+            "sampling_rate": sampling_rate,
+            "artifact": artifact,
+        }
+    else:
+        # Speech to text
+        audio_url = job_input.get("audio_url") or job_input.get("audioUrl")
+        temp_path = None
+        try:
+            if audio_url:
+                temp_path = download_to_tempfile(str(audio_url), suffix=".wav")
+                output = _pipeline(temp_path)
+            else:
+                return {"error": "Missing 'audio_url' in input (base64 deprecated)", "status": "failed"}
+            
+            return {
+                "text": output.get("text") if isinstance(output, dict) else str(output),
+                "model_id": HF_MODEL_ID,
+                "task": "speech_to_text",
+            }
+        finally:
+            if temp_path and os.path.exists(temp_path):
+                os.remove(temp_path)
+
+
+def handler(job: dict[str, Any]) -> dict[str, Any]:
+    global _failure_count
+    job_input = job.get("input") or {}
+    
+    if job_input.get("debug") is True:
+        return {"status": "ok", "pipeline_loaded": _pipeline is not None, "task": _task_kind, "error": _load_error}
+        
+    if _pipeline is None:
+        wait_start = time.time()
+        while _pipeline is None and _load_error is None:
+            if time.time() - wait_start > MODEL_LOAD_WAIT_TIMEOUT_SECONDS:
+                return {"error": "Model failed to load within timeout.", "status": "loading"}
+            time.sleep(2)
+        if _load_error:
+            return {"error": f"Model load failed: {_load_error}", "status": "failed"}
+
+    try:
+        global _last_request_at
+        _last_request_at = time.time()
+        started_at = time.time()
+
+        if _task_kind == "text2img":
+            result = _handle_image(job, job_input)
+        elif _task_kind == "text2video":
+            result = _handle_video(job, job_input)
+        else:
+            result = _handle_audio(job, job_input)
+
+        if "error" not in result:
+            result["execution_duration_ms"] = max(int((time.time() - started_at) * 1000), 0)
+            _failure_count = 0
+            
+        return result
+    except Exception as exc:
         import traceback
         _failure_count += 1
-        _log_tunnel("ERROR", f"Inference failed: {e}")
+        log_tunnel("ERROR", f"Inference failed: {exc}")
         if _failure_count >= CLEANUP_FAILURE_THRESHOLD:
-            _request_cleanup("inference_failure_threshold")
-        return {"error": str(e), "traceback": traceback.format_exc(), "model_id": HF_MODEL_ID}
+            request_cleanup("inference_failure_threshold")
+        return {"error": str(exc), "traceback": traceback.format_exc(), "model_id": HF_MODEL_ID}
 
 
 def main() -> None:
-    import traceback
-    print("[worker] Starting Inference Worker v1.7 (Background Load)", flush=True)
-    try:
-        import runpod
+    import runpod
 
-        def _idle_watchdog() -> None:
-            global _last_request_at
-            while True:
-                time.sleep(15)
-                if _pipeline is None:
-                    continue
-                if _last_request_at == 0.0:
-                    continue
-                idle_seconds = time.time() - _last_request_at
-                if idle_seconds > CLEANUP_IDLE_TIMEOUT_SECONDS:
-                    _log_tunnel("WARNING", f"Idle timeout reached: {idle_seconds:.0f}s")
-                    _request_cleanup("idle_timeout")
-                    return
-        
-        # Start model loading in background thread
-        threading.Thread(target=_load_model_background, daemon=True).start()
-        threading.Thread(target=_idle_watchdog, daemon=True).start()
-        
-        print("[worker] Starting Runpod listener immediately...", flush=True)
-        runpod.serverless.start({"handler": handler})
-    except Exception:
-        print("[worker] CRITICAL ERROR during startup:", flush=True)
-        traceback.print_exc()
-        sys.exit(1)
+    def _idle_watchdog() -> None:
+        while True:
+            time.sleep(15)
+            if _pipeline is None or _last_request_at == 0.0:
+                continue
+            if time.time() - _last_request_at > CLEANUP_IDLE_TIMEOUT_SECONDS:
+                log_tunnel("WARNING", "Idle timeout reached, requesting cleanup")
+                request_cleanup("idle_timeout")
+                return
+
+    threading.Thread(target=_load_model_background, daemon=True).start()
+    threading.Thread(target=_idle_watchdog, daemon=True).start()
+    runpod.serverless.start({"handler": handler})
 
 
 if __name__ == "__main__":
