@@ -9,6 +9,7 @@ from typing import Annotated
 from fastapi import Depends, Header, HTTPException, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from google.cloud import firestore
+from src.services.db import get_firestore_client
 
 from src.core.config import get_settings
 from src.core.errors import RateLimitError, UnauthorizedError
@@ -39,7 +40,7 @@ class RequestContext:
 def get_firestore():
     """Return Firestore client for current project."""
     settings = get_settings()
-    return _get_repo().get_firestore_client(settings.gcp_project_id)
+    return get_firestore_client(settings.gcp_project_id)
 
 
 def _check_rate_limit(subject: str, limit: int) -> None:
@@ -99,3 +100,5 @@ def verify_internal_webhook_secret(
         return
     if x_visgate_secret != settings.internal_webhook_secret:
         raise HTTPException(status_code=403, detail="Invalid internal secret")
+
+from src.services.db import get_firestore_client

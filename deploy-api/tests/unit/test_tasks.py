@@ -279,7 +279,7 @@ def internal_client(monkeypatch):
     mock_fs.collection = _collection
 
     from src.api import dependencies
-    monkeypatch.setattr(dependencies, "get_firestore_client", lambda project_id=None: mock_fs)
+    monkeypatch.setattr("src.services.db.get_firestore_client", lambda project_id=None: mock_fs)
 
     from src.main import app
     return TestClient(app)
@@ -336,7 +336,7 @@ def test_internal_orchestrate_endpoint_403_wrong_secret(mock_fetch, monkeypatch)
     mock_fs.collection = _col
 
     from src.api import dependencies
-    monkeypatch.setattr(dependencies, "get_firestore_client", lambda project_id=None: mock_fs)
+    monkeypatch.setattr("src.services.db.get_firestore_client", lambda project_id=None: mock_fs)
     from src.main import app
     client = TestClient(app)
 

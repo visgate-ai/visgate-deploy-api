@@ -51,7 +51,7 @@ def firestore_mock(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
     _firestore_store.clear()
     mock_client = _make_firestore_mock()
     from src.api import dependencies
-    monkeypatch.setattr(dependencies, "get_firestore_client", lambda project_id=None: mock_client)
+    monkeypatch.setattr("src.services.db.get_firestore_client", lambda project_id=None: mock_client)
     return mock_client
 
 
