@@ -90,6 +90,8 @@ MODALITY_CONFIGS: dict[str, dict[str, Any]] = {
     },
 }
 
+SMOKE_MODEL_IDS = {config["deployment"]["hf_model_id"] for config in MODALITY_CONFIGS.values()}
+
 
 def _auth_headers() -> dict[str, str]:
     return {
@@ -105,6 +107,18 @@ def _request_json(method: str, url: str, payload: dict[str, Any] | None = None) 
         with urllib.request.urlopen(request, timeout=120) as response:
             return json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"HTTP {exc.code} for {url}: {body}") from exc
+
+
+def _request_no_content(method: str, url: str) -> None:
+    request = urllib.request.Request(url, method=method, headers=_auth_headers())
+    try:
+        with urllib.request.urlopen(request, timeout=120):
+            return
+    except urllib.error.HTTPError as exc:
+        if exc.code == 204:
+            return
         body = exc.read().decode("utf-8", errors="replace")
         raise RuntimeError(f"HTTP {exc.code} for {url}: {body}") from exc
 
@@ -249,6 +263,32 @@ def _webhook_delivery_seen(webhook_url: str, started_at_iso: str, *, timeout_sec
     return False
 
 
+def _list_deployments(limit: int = 100) -> list[dict[str, Any]]:
+    response = _request_json("GET", f"{API_BASE}/v1/deployments?limit={limit}")
+    return list(response.get("deployments") or [])
+
+
+def _delete_deployment(deployment_id: str) -> None:
+    _request_no_content("DELETE", f"{API_BASE}/v1/deployments/{deployment_id}")
+
+
+def _cleanup_stale_smoke_deployments() -> None:
+    deployments = _list_deployments()
+    deleted_any = False
+    for deployment in deployments:
+        deployment_id = deployment.get("deployment_id")
+        hf_model_id = deployment.get("hf_model_id")
+        status = deployment.get("status")
+        if not deployment_id or hf_model_id not in SMOKE_MODEL_IDS:
+            continue
+        if status == "deleted":
+            continue
+        _delete_deployment(deployment_id)
+        deleted_any = True
+    if deleted_any:
+        time.sleep(15)
+
+
 def _deployment_and_job(modality: str) -> dict[str, Any]:
     config = MODALITY_CONFIGS[modality]
     deployment_webhook_url = _webhook_url("deployment", modality)
@@ -262,79 +302,85 @@ def _deployment_and_job(modality: str) -> dict[str, Any]:
     deployment_id = deployment_response["deployment_id"]
     started_at_iso = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
-    status_capture = _start_sse_capture(f"{API_BASE}/v1/deployments/{deployment_id}/stream")
-    logs_capture = _start_sse_capture(f"{API_BASE}/v1/deployments/{deployment_id}/logs/stream")
-    deployment_final = _poll_json(
-        f"{API_BASE}/v1/deployments/{deployment_id}",
-        {"ready", "failed", "webhook_failed", "deleted"},
-        timeout_seconds=1500 if modality == "video" else 900,
-    )
-    status_events = _stop_sse_capture(status_capture)
-    log_events = _stop_sse_capture(logs_capture)
+    try:
+        status_capture = _start_sse_capture(f"{API_BASE}/v1/deployments/{deployment_id}/stream")
+        logs_capture = _start_sse_capture(f"{API_BASE}/v1/deployments/{deployment_id}/logs/stream")
+        deployment_final = _poll_json(
+            f"{API_BASE}/v1/deployments/{deployment_id}",
+            {"ready", "failed", "webhook_failed", "deleted"},
+            timeout_seconds=1500 if modality == "video" else 900,
+        )
+        status_events = _stop_sse_capture(status_capture)
+        log_events = _stop_sse_capture(logs_capture)
 
-    result: dict[str, Any] = {
-        "modality": modality,
-        "deployment_id": deployment_id,
-        "deployment": deployment_final,
-        "deployment_status_events": status_events,
-        "deployment_log_events": log_events,
-        "live_log_tunnel_seen": _cloud_log_seen(deployment_id, started_at_iso),
-    }
+        result: dict[str, Any] = {
+            "modality": modality,
+            "deployment_id": deployment_id,
+            "deployment": deployment_final,
+            "deployment_status_events": status_events,
+            "deployment_log_events": log_events,
+            "live_log_tunnel_seen": _cloud_log_seen(deployment_id, started_at_iso),
+        }
 
-    if deployment_final["status"] != "ready":
-        raise RuntimeError(f"{modality} deployment did not become ready: {deployment_final}")
+        if deployment_final["status"] != "ready":
+            raise RuntimeError(f"{modality} deployment did not become ready: {deployment_final}")
 
-    result["deployment_webhook_url"] = deployment_webhook_url
-    result["deployment_webhook_verified"] = _webhook_delivery_seen(deployment_webhook_url, started_at_iso)
-    if not result["deployment_webhook_verified"]:
-        raise RuntimeError(f"Timed out waiting for deployment webhook delivery log for {deployment_webhook_url}")
+        result["deployment_webhook_url"] = deployment_webhook_url
+        result["deployment_webhook_verified"] = _webhook_delivery_seen(deployment_webhook_url, started_at_iso)
+        if not result["deployment_webhook_verified"]:
+            raise RuntimeError(f"Timed out waiting for deployment webhook delivery log for {deployment_webhook_url}")
 
-    job_payload = dict(config["job"])
-    job_payload["deployment_id"] = deployment_id
-    job_payload["user_webhook_url"] = job_webhook_url
-    job_response = _request_json("POST", f"{API_BASE}/v1/inference/jobs", job_payload)
-    job_id = job_response["job_id"]
-    job_started_at_iso = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-    job_final = _poll_json(
-        f"{API_BASE}/v1/inference/jobs/{job_id}",
-        {"completed", "failed", "cancelled", "expired"},
-        timeout_seconds=1800 if modality == "video" else 900,
-    )
+        job_payload = dict(config["job"])
+        job_payload["deployment_id"] = deployment_id
+        job_payload["user_webhook_url"] = job_webhook_url
+        job_response = _request_json("POST", f"{API_BASE}/v1/inference/jobs", job_payload)
+        job_id = job_response["job_id"]
+        job_started_at_iso = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        job_final = _poll_json(
+            f"{API_BASE}/v1/inference/jobs/{job_id}",
+            {"completed", "failed", "cancelled", "expired"},
+            timeout_seconds=1800 if modality == "video" else 900,
+        )
 
-    result["job_id"] = job_id
-    result["job"] = job_final
-    result["job_webhook_url"] = job_webhook_url
-    result["job_webhook_verified"] = _webhook_delivery_seen(job_webhook_url, job_started_at_iso)
-    if not result["job_webhook_verified"]:
-        raise RuntimeError(f"Timed out waiting for inference webhook delivery log for {job_webhook_url}")
+        result["job_id"] = job_id
+        result["job"] = job_final
+        result["job_webhook_url"] = job_webhook_url
+        result["job_webhook_verified"] = _webhook_delivery_seen(job_webhook_url, job_started_at_iso)
+        if not result["job_webhook_verified"]:
+            raise RuntimeError(f"Timed out waiting for inference webhook delivery log for {job_webhook_url}")
 
-    staged_field = config.get("staged_field")
-    if staged_field:
-        staged = (job_final.get("input") or {}).get(staged_field)
-        if not isinstance(staged, dict) or not staged.get("key"):
-            raise RuntimeError(f"{modality} job missing staged input metadata: {job_final.get('input')}")
-        result["staged_input"] = staged
-        result["staged_input_verified"] = _head_object(INPUT_R2_CLIENT, INPUT_BUCKET, staged["key"])
-        if not result["staged_input_verified"]:
-            raise RuntimeError(f"{modality} staged input object not found in R2 input bucket: {staged['key']}")
+        staged_field = config.get("staged_field")
+        if staged_field:
+            staged = (job_final.get("input") or {}).get(staged_field)
+            if not isinstance(staged, dict) or not staged.get("key"):
+                raise RuntimeError(f"{modality} job missing staged input metadata: {job_final.get('input')}")
+            result["staged_input"] = staged
+            result["staged_input_verified"] = _head_object(INPUT_R2_CLIENT, INPUT_BUCKET, staged["key"])
+            if not result["staged_input_verified"]:
+                raise RuntimeError(f"{modality} staged input object not found in R2 input bucket: {staged['key']}")
 
-    if config.get("expect_output"):
-        artifact = job_final.get("artifact")
-        if not isinstance(artifact, dict):
-            raise RuntimeError(f"{modality} job missing artifact metadata: {job_final}")
-        result["artifact"] = artifact
-        artifact_key = artifact.get("key")
-        if artifact_key:
-            result["output_verified"] = _head_object(OUTPUT_R2_CLIENT, OUTPUT_BUCKET, artifact_key)
-        else:
-            prefix = ((job_final.get("output_destination") or {}).get("key_prefix") or "").strip("/")
-            listed = _list_prefix(OUTPUT_R2_CLIENT, OUTPUT_BUCKET, prefix) if prefix else []
-            result["output_listed_keys"] = listed
-            result["output_verified"] = bool(listed)
-        if not result["output_verified"]:
-            raise RuntimeError(f"{modality} output object could not be verified in R2 output bucket")
+        if config.get("expect_output"):
+            artifact = job_final.get("artifact")
+            if not isinstance(artifact, dict):
+                raise RuntimeError(f"{modality} job missing artifact metadata: {job_final}")
+            result["artifact"] = artifact
+            artifact_key = artifact.get("key")
+            if artifact_key:
+                result["output_verified"] = _head_object(OUTPUT_R2_CLIENT, OUTPUT_BUCKET, artifact_key)
+            else:
+                prefix = ((job_final.get("output_destination") or {}).get("key_prefix") or "").strip("/")
+                listed = _list_prefix(OUTPUT_R2_CLIENT, OUTPUT_BUCKET, prefix) if prefix else []
+                result["output_listed_keys"] = listed
+                result["output_verified"] = bool(listed)
+            if not result["output_verified"]:
+                raise RuntimeError(f"{modality} output object could not be verified in R2 output bucket")
 
-    return result
+        return result
+    finally:
+        try:
+            _delete_deployment(deployment_id)
+        except Exception:
+            pass
 
 
 def main() -> int:
@@ -346,6 +392,8 @@ def main() -> int:
     unknown = [item for item in modalities if item not in MODALITY_CONFIGS]
     if unknown:
         raise SystemExit(f"Unsupported modalities: {', '.join(unknown)}")
+
+    _cleanup_stale_smoke_deployments()
 
     results: list[dict[str, Any]] = []
     failures: list[dict[str, Any]] = []
