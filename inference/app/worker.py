@@ -26,9 +26,9 @@ from app.config import (
     DEFAULT_NUM_INFERENCE_STEPS,
     DEVICE,
     HF_MODEL_ID,
-    HF_TOKEN,
     MODEL_LOAD_WAIT_TIMEOUT_SECONDS,
     VISGATE_WEBHOOK,
+    VISGATE_INTERNAL_SECRET,
 )
 from app.loader import resolve_model_source
 from app.runtime_common import download_to_tempfile, log_tunnel, post_json, request_cleanup, upload_bytes
@@ -57,12 +57,15 @@ def _notify_orchestrator(
             {
                 "t_r2_sync_s": timings.get("t_r2_sync_s"),
                 "t_model_load_s": timings.get("t_model_load_s"),
-                "loaded_from_cache": timings.get("loaded_from_cache"),
-            }
         )
+    
+    headers = {}
+    if VISGATE_INTERNAL_SECRET:
+        headers["X-Visgate-Internal-Secret"] = VISGATE_INTERNAL_SECRET
+        
     for attempt in range(5):
         try:
-            post_json(VISGATE_WEBHOOK, payload)
+            post_json(VISGATE_WEBHOOK, payload, headers=headers)
             return
         except Exception:
             if attempt < 4:
