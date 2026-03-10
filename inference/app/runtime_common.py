@@ -105,8 +105,10 @@ def upload_bytes(
     if not upload_target:
         return None
     try:
-        subprocess.run(["s5cmd", "version"], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    except Exception:
+        res = subprocess.run(["s5cmd", "version"], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        print(f"s5cmd version check: {res.stdout.decode().strip()}")
+    except Exception as e:
+        print(f"s5cmd search failed: {e}")
         return None
 
     tmp_path = ""
@@ -119,11 +121,13 @@ def upload_bytes(
         if s3_config:
             env["AWS_ACCESS_KEY_ID"] = s3_config.get("accessId", "")
             env["AWS_SECRET_ACCESS_KEY"] = s3_config.get("accessSecret", "")
-            env["AWS_ENDPOINT_URL"] = s3_config.get("endpointUrl", "")
+            env["AWS_REGION"] = "auto"  # recommended for R2
             if s3_config.get("endpointUrl"):
                 cmd.extend(["--endpoint-url", s3_config["endpointUrl"]])
         cmd.extend(["cp", tmp_path, upload_target])
-        subprocess.run(cmd, check=True, env=env)
+        print(f"Executing: {' '.join(cmd)} to {upload_target}")
+        res = subprocess.run(cmd, check=True, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        print(f"s5cmd success: {res.stdout.decode().strip()}")
         url = object_url or upload_target
         if CDN_BASE_URL and object_key:
             url = f"{CDN_BASE_URL.rstrip('/')}/{object_key}"
