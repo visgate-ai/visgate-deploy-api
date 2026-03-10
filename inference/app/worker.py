@@ -55,8 +55,9 @@ def _notify_orchestrator(
     if timings:
         payload.update(
             {
-                "t_r2_sync_s": timings.get("t_r2_sync_s"),
                 "t_model_load_s": timings.get("t_model_load_s"),
+                "loaded_from_cache": timings.get("loaded_from_cache"),
+            }
         )
     
     headers = {}
@@ -165,6 +166,15 @@ def _handle_image(job: dict[str, Any], job_input: dict[str, Any]) -> dict[str, A
             if artifact:
                 result["artifact"] = artifact
             result.pop("image_base64", None)  # Force remove base64
+        elif result.get("file_path"):
+            with open(result["file_path"], "rb") as f:
+                data = f.read()
+            artifact = upload_bytes(data, job, job_input, content_type=result.get("content_type", "image/png"), extension=result.get("file_extension", "png").lstrip("."))
+            if artifact:
+                result["artifact"] = artifact
+            # Cleanup temp file from pipeline
+            if os.path.exists(result["file_path"]):
+                os.remove(result["file_path"])
         return result
     finally:
         if tmp_img and os.path.exists(tmp_img):
