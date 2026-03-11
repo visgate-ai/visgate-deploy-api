@@ -25,7 +25,7 @@ jobs:
   smoke:
     if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 180
     permissions:
       contents: read
       id-token: write
@@ -52,6 +52,12 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install boto3
 
+      - name: Install cloudflared
+        run: |
+          sudo wget -q -O /usr/local/bin/cloudflared https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64
+          sudo chmod +x /usr/local/bin/cloudflared
+          cloudflared --version
+
       - name: Load smoke and R2 secrets
         env:
           PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
@@ -59,6 +65,7 @@ jobs:
           {
             echo "RUNPOD_API_KEY=$(gcloud secrets versions access latest --secret=VISGATE_DEPLOY_API_SMOKE_TEST_RUNPOD --project "$PROJECT_ID")"
             echo "HF_TOKEN=$(gcloud secrets versions access latest --secret=VISGATE_DEPLOY_API_SMOKE_TEST_HF_KEY --project "$PROJECT_ID")"
+            echo "INTERNAL_WEBHOOK_SECRET=$(gcloud secrets versions access latest --secret=VISGATE_DEPLOY_API_INTERNAL_WEBHOOK_SECRET --project "$PROJECT_ID")"
             echo "INPUT_R2_ACCESS_KEY_ID=$(gcloud secrets versions access latest --secret=VISGATE_DEPLOY_API_INFERENCE_R2_ACCESS_KEY_ID_INPUT_R --project "$PROJECT_ID")"
             echo "INPUT_R2_SECRET_ACCESS_KEY=$(gcloud secrets versions access latest --secret=VISGATE_DEPLOY_API_INFERENCE_R2_SECRET_ACCESS_KEY_INPUT_R --project "$PROJECT_ID")"
             echo "INPUT_R2_BUCKET_NAME=$(gcloud secrets versions access latest --secret=VISGATE_DEPLOY_API_INFERENCE_R2_BUCKET_NAME_INPUT --project "$PROJECT_ID")"

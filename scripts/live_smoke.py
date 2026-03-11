@@ -4,14 +4,17 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import os
+import socketserver
 import subprocess
 import threading
 import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
@@ -21,6 +24,7 @@ API_BASE = os.environ["API_BASE"].rstrip("/")
 RUNPOD_API_KEY = os.environ["RUNPOD_API_KEY"]
 HF_TOKEN = os.environ["HF_TOKEN"]
 GCP_PROJECT_ID = os.environ.get("GCP_PROJECT_ID", "")
+INTERNAL_WEBHOOK_SECRET = os.environ.get("INTERNAL_WEBHOOK_SECRET", "")
 R2_ENDPOINT_URL = os.environ["R2_ENDPOINT_URL"]
 
 INPUT_R2_CLIENT = boto3.client(
@@ -39,6 +43,24 @@ OUTPUT_R2_CLIENT = boto3.client(
 )
 INPUT_BUCKET = os.environ["INPUT_R2_BUCKET_NAME"]
 OUTPUT_BUCKET = os.environ["OUTPUT_R2_BUCKET_NAME"]
+
+DEPLOYMENT_TIMEOUTS = {
+    "image": 1800,
+    "audio": 1500,
+    "video": 3600,
+}
+
+JOB_TIMEOUTS = {
+    "image": 1200,
+    "audio": 900,
+    "video": 2400,
+}
+
+CACHE_TIMEOUTS = {
+    "image": 2400,
+    "audio": 1800,
+    "video": 5400,
+}
 
 MODALITY_CONFIGS: dict[str, dict[str, Any]] = {
     "image": {
@@ -93,6 +115,127 @@ MODALITY_CONFIGS: dict[str, dict[str, Any]] = {
 SMOKE_MODEL_IDS = {config["deployment"]["hf_model_id"] for config in MODALITY_CONFIGS.values()}
 
 
+class _ReusableThreadingHTTPServer(ThreadingHTTPServer):
+    allow_reuse_address = True
+
+
+class _WebhookHandler(BaseHTTPRequestHandler):
+    server: "WebhookServer"
+
+    def do_POST(self) -> None:  # noqa: N802
+        content_length = int(self.headers.get("Content-Length", "0"))
+        raw_body = self.rfile.read(content_length) if content_length else b"{}"
+        try:
+            payload = json.loads(raw_body.decode("utf-8"))
+        except json.JSONDecodeError:
+            payload = {"raw": raw_body.decode("utf-8", errors="replace")}
+        self.server.record_event(self.path, payload, dict(self.headers.items()))
+        self.send_response(204)
+        self.end_headers()
+
+    def log_message(self, format: str, *args: Any) -> None:
+        return
+
+
+class WebhookServer(_ReusableThreadingHTTPServer):
+    def __init__(self, server_address: tuple[str, int]):
+        super().__init__(server_address, _WebhookHandler)
+        self.events: dict[str, list[dict[str, Any]]] = {}
+        self._condition = threading.Condition()
+
+    def record_event(self, path: str, payload: dict[str, Any], headers: dict[str, str]) -> None:
+        with self._condition:
+            self.events.setdefault(path, []).append(
+                {
+                    "received_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                    "payload": payload,
+                    "headers": headers,
+                }
+            )
+            self._condition.notify_all()
+
+    def wait_for_event(self, path: str, *, timeout_seconds: int) -> dict[str, Any] | None:
+        deadline = time.time() + timeout_seconds
+        with self._condition:
+            while time.time() < deadline:
+                events = self.events.get(path)
+                if events:
+                    return events[0]
+                remaining = deadline - time.time()
+                self._condition.wait(timeout=max(0.1, min(5.0, remaining)))
+        return None
+
+
+@dataclass
+class WebhookCapture:
+    server: WebhookServer
+    thread: threading.Thread
+    base_url: str
+    tunnel_process: subprocess.Popen[str] | None = None
+
+
+def _find_free_port() -> int:
+    with contextlib.closing(socketserver.socket.socket()) as sock:
+        sock.bind(("127.0.0.1", 0))
+        return int(sock.getsockname()[1])
+
+
+def _wait_for_tunnel_url(process: subprocess.Popen[str], *, timeout_seconds: int = 60) -> str:
+    assert process.stderr is not None
+    deadline = time.time() + timeout_seconds
+    while time.time() < deadline:
+        line = process.stderr.readline()
+        if not line:
+            if process.poll() is not None:
+                break
+            continue
+        marker = "trycloudflare.com"
+        if marker in line:
+            for token in line.split():
+                if token.startswith("https://") and marker in token:
+                    return token.rstrip()
+    stderr_tail = ""
+    if process.stderr is not None:
+        try:
+            stderr_tail = process.stderr.read()
+        except Exception:
+            stderr_tail = ""
+    raise RuntimeError(f"Timed out waiting for cloudflared tunnel URL; stderr={stderr_tail[-500:]}")
+
+
+def _start_webhook_capture() -> WebhookCapture:
+    configured_base = os.environ.get("WEBHOOK_BASE_URL", "").strip().rstrip("/")
+    port = int(os.environ.get("WEBHOOK_PORT", "0")) or _find_free_port()
+    server = WebhookServer(("127.0.0.1", port))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    if configured_base:
+        return WebhookCapture(server=server, thread=thread, base_url=configured_base)
+
+    process = subprocess.Popen(
+        ["cloudflared", "tunnel", "--url", f"http://127.0.0.1:{port}", "--no-autoupdate"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    base_url = _wait_for_tunnel_url(process)
+    return WebhookCapture(server=server, thread=thread, base_url=base_url.rstrip("/"), tunnel_process=process)
+
+
+def _stop_webhook_capture(capture: WebhookCapture) -> None:
+    capture.server.shutdown()
+    capture.server.server_close()
+    capture.thread.join(timeout=5)
+    process = capture.tunnel_process
+    if process and process.poll() is None:
+        process.terminate()
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            process.kill()
+
+
 def _auth_headers() -> dict[str, str]:
     return {
         "Authorization": f"Bearer {RUNPOD_API_KEY}",
@@ -100,11 +243,18 @@ def _auth_headers() -> dict[str, str]:
     }
 
 
-def _request_json(method: str, url: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+def _request_json(
+    method: str,
+    url: str,
+    payload: dict[str, Any] | None = None,
+    *,
+    headers: dict[str, str] | None = None,
+    timeout_seconds: int = 120,
+) -> dict[str, Any]:
     data = None if payload is None else json.dumps(payload).encode("utf-8")
-    request = urllib.request.Request(url, method=method, data=data, headers=_auth_headers())
+    request = urllib.request.Request(url, method=method, data=data, headers=headers or _auth_headers())
     try:
-        with urllib.request.urlopen(request, timeout=120) as response:
+        with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
             return json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
         body = exc.read().decode("utf-8", errors="replace")
@@ -188,8 +338,12 @@ def _stop_sse_capture(capture: SseCapture) -> list[dict[str, Any]]:
     return capture.events
 
 
-def _webhook_url(kind: str, modality: str) -> str:
-    return f"https://httpbin.org/anything/{kind}-{modality}"
+def _webhook_path(kind: str, modality: str) -> str:
+    return f"/{kind}-{modality}"
+
+
+def _webhook_url(base_url: str, kind: str, modality: str) -> str:
+    return f"{base_url}{_webhook_path(kind, modality)}"
 
 
 def _head_object(client: Any, bucket: str, key: str) -> bool:
@@ -263,6 +417,92 @@ def _webhook_delivery_seen(webhook_url: str, started_at_iso: str, *, timeout_sec
     return False
 
 
+def _wait_for_webhook_event(
+    capture: WebhookCapture,
+    *,
+    kind: str,
+    modality: str,
+    timeout_seconds: int,
+) -> dict[str, Any]:
+    path = _webhook_path(kind, modality)
+    event = capture.server.wait_for_event(path, timeout_seconds=timeout_seconds)
+    if event:
+        return event
+    webhook_url = _webhook_url(capture.base_url, kind, modality)
+    if _webhook_delivery_seen(webhook_url, time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - timeout_seconds)), timeout_seconds=30):
+        return {"received_via": "cloud_log_only", "payload": None, "headers": {}}
+    raise RuntimeError(f"Timed out waiting for {kind} webhook delivery for {webhook_url}")
+
+
+def _model_catalog() -> list[dict[str, Any]]:
+    response = _request_json("GET", f"{API_BASE}/v1/models", headers={"Content-Type": "application/json"})
+    return list(response.get("models") or [])
+
+
+def _model_cached(model_id: str) -> bool:
+    for item in _model_catalog():
+        if item.get("model_id") == model_id:
+            return bool(item.get("cached"))
+    return False
+
+
+def _cache_model(model_id: str, modality: str) -> dict[str, Any] | None:
+    if not INTERNAL_WEBHOOK_SECRET:
+        return None
+    return _request_json(
+        "POST",
+        f"{API_BASE}/internal/tasks/cache-model",
+        {"hf_model_id": model_id, "hf_token": HF_TOKEN},
+        headers={
+            "Content-Type": "application/json",
+            "X-Visgate-Internal-Secret": INTERNAL_WEBHOOK_SECRET,
+        },
+        timeout_seconds=CACHE_TIMEOUTS[modality],
+    )
+
+
+def _ensure_model_cached(modality: str) -> dict[str, Any]:
+    model_id = str(MODALITY_CONFIGS[modality]["deployment"]["hf_model_id"])
+    result: dict[str, Any] = {
+        "model_id": model_id,
+        "cached_before": _model_cached(model_id),
+    }
+    if result["cached_before"]:
+        result["cache_status"] = "already_cached"
+        result["cached_after"] = True
+        return result
+    cache_response = _cache_model(model_id, modality)
+    if cache_response is not None:
+        result["cache_response"] = cache_response
+        result["cache_status"] = str(cache_response.get("status", "unknown"))
+    else:
+        result["cache_status"] = "skipped"
+
+    deadline = time.time() + 180
+    while time.time() < deadline:
+        if _model_cached(model_id):
+            result["cached_after"] = True
+            return result
+        time.sleep(5)
+
+    result["cached_after"] = _model_cached(model_id)
+    if not result["cached_after"] and cache_response is not None:
+        raise RuntimeError(f"{modality} model did not appear as cached after internal cache task: {model_id}")
+    return result
+
+
+def _prepare_models(modalities: list[str]) -> list[dict[str, Any]]:
+    prepared: list[dict[str, Any]] = []
+    seen_models: set[str] = set()
+    for modality in modalities:
+        model_id = str(MODALITY_CONFIGS[modality]["deployment"]["hf_model_id"])
+        if model_id in seen_models:
+            continue
+        prepared.append({"modality": modality, **_ensure_model_cached(modality)})
+        seen_models.add(model_id)
+    return prepared
+
+
 def _list_deployments(limit: int = 100) -> list[dict[str, Any]]:
     response = _request_json("GET", f"{API_BASE}/v1/deployments?limit={limit}")
     return list(response.get("deployments") or [])
@@ -291,8 +531,9 @@ def _cleanup_stale_smoke_deployments() -> None:
 
 def _deployment_and_job(modality: str) -> dict[str, Any]:
     config = MODALITY_CONFIGS[modality]
-    deployment_webhook_url = _webhook_url("deployment", modality)
-    job_webhook_url = _webhook_url("job", modality)
+    webhook_capture = _start_webhook_capture()
+    deployment_webhook_url = _webhook_url(webhook_capture.base_url, "deployment", modality)
+    job_webhook_url = _webhook_url(webhook_capture.base_url, "job", modality)
     deployment_payload = dict(config["deployment"])
     deployment_payload["hf_token"] = HF_TOKEN
     deployment_payload["user_runpod_key"] = RUNPOD_API_KEY
@@ -308,7 +549,7 @@ def _deployment_and_job(modality: str) -> dict[str, Any]:
         deployment_final = _poll_json(
             f"{API_BASE}/v1/deployments/{deployment_id}",
             {"ready", "failed", "webhook_failed", "deleted"},
-            timeout_seconds=1500 if modality == "video" else 900,
+            timeout_seconds=DEPLOYMENT_TIMEOUTS[modality],
         )
         status_events = _stop_sse_capture(status_capture)
         log_events = _stop_sse_capture(logs_capture)
@@ -326,28 +567,37 @@ def _deployment_and_job(modality: str) -> dict[str, Any]:
             raise RuntimeError(f"{modality} deployment did not become ready: {deployment_final}")
 
         result["deployment_webhook_url"] = deployment_webhook_url
-        result["deployment_webhook_verified"] = _webhook_delivery_seen(deployment_webhook_url, started_at_iso)
-        if not result["deployment_webhook_verified"]:
-            raise RuntimeError(f"Timed out waiting for deployment webhook delivery log for {deployment_webhook_url}")
+        deployment_webhook_event = _wait_for_webhook_event(
+            webhook_capture,
+            kind="deployment",
+            modality=modality,
+            timeout_seconds=300,
+        )
+        result["deployment_webhook_verified"] = True
+        result["deployment_webhook_event"] = deployment_webhook_event
 
         job_payload = dict(config["job"])
         job_payload["deployment_id"] = deployment_id
         job_payload["user_webhook_url"] = job_webhook_url
         job_response = _request_json("POST", f"{API_BASE}/v1/inference/jobs", job_payload)
         job_id = job_response["job_id"]
-        job_started_at_iso = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         job_final = _poll_json(
             f"{API_BASE}/v1/inference/jobs/{job_id}",
             {"completed", "failed", "cancelled", "expired"},
-            timeout_seconds=1800 if modality == "video" else 900,
+            timeout_seconds=JOB_TIMEOUTS[modality],
         )
 
         result["job_id"] = job_id
         result["job"] = job_final
         result["job_webhook_url"] = job_webhook_url
-        result["job_webhook_verified"] = _webhook_delivery_seen(job_webhook_url, job_started_at_iso)
-        if not result["job_webhook_verified"]:
-            raise RuntimeError(f"Timed out waiting for inference webhook delivery log for {job_webhook_url}")
+        job_webhook_event = _wait_for_webhook_event(
+            webhook_capture,
+            kind="job",
+            modality=modality,
+            timeout_seconds=300,
+        )
+        result["job_webhook_verified"] = True
+        result["job_webhook_event"] = job_webhook_event
 
         staged_field = config.get("staged_field")
         if staged_field:
@@ -377,6 +627,7 @@ def _deployment_and_job(modality: str) -> dict[str, Any]:
 
         return result
     finally:
+        _stop_webhook_capture(webhook_capture)
         try:
             _delete_deployment(deployment_id)
         except Exception:
@@ -386,6 +637,8 @@ def _deployment_and_job(modality: str) -> dict[str, Any]:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--output", default="smoke-results.json")
+    parser.add_argument("--cleanup-only", action="store_true")
+    parser.add_argument("--skip-cleanup", action="store_true")
     args = parser.parse_args()
 
     modalities = [item.strip() for item in os.environ.get("MODALITIES", "image,audio,video").split(",") if item.strip()]
@@ -393,7 +646,16 @@ def main() -> int:
     if unknown:
         raise SystemExit(f"Unsupported modalities: {', '.join(unknown)}")
 
-    _cleanup_stale_smoke_deployments()
+    if args.cleanup_only:
+        _cleanup_stale_smoke_deployments()
+        output_path = Path(args.output)
+        output_path.write_text(json.dumps({"results": [], "failures": []}, indent=2), encoding="utf-8")
+        return 0
+
+    if not args.skip_cleanup:
+        _cleanup_stale_smoke_deployments()
+
+    preparation = _prepare_models(modalities)
 
     results: list[dict[str, Any]] = []
     failures: list[dict[str, Any]] = []
@@ -410,7 +672,10 @@ def main() -> int:
             results.append(failure)
 
     output_path = Path(args.output)
-    output_path.write_text(json.dumps({"results": results, "failures": failures}, indent=2), encoding="utf-8")
+    output_path.write_text(
+        json.dumps({"preparation": preparation, "results": results, "failures": failures}, indent=2),
+        encoding="utf-8",
+    )
     print(output_path.read_text(encoding="utf-8"))
     return 1 if failures else 0
 
