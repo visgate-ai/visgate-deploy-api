@@ -7,6 +7,8 @@ on:
     paths:
       - '.github/workflows/live-smoke.yaml'
       - 'scripts/live_smoke.py'
+      - 'deploy-api/**'
+      - 'inference/**'
   workflow_dispatch:
     inputs:
       modalities:
@@ -82,7 +84,7 @@ jobs:
             echo "GCP_PROJECT_ID=$PROJECT_ID"
           } >> "$GITHUB_ENV"
 
-      - name: Wait for deploy workflow on same SHA
+      - name: Wait for prerequisite workflows on same SHA
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
@@ -97,27 +99,58 @@ jobs:
 
           repo = os.environ["REPO"]
           target_sha = os.environ["TARGET_SHA"]
-          endpoint = f"repos/{repo}/actions/workflows/deploy.yaml/runs?head_sha={target_sha}&per_page=5"
+          workflows = {
+            "deploy": "deploy.yaml",
+            "build": "inference.yaml",
+          }
+          optional_after = 3
+          seen_build = False
 
-          for _ in range(60):
-              output = subprocess.check_output(["gh", "api", endpoint], text=True)
-              runs = json.loads(output).get("workflow_runs", [])
-              if runs:
-                  run = runs[0]
-                  status = run.get("status")
-                  conclusion = run.get("conclusion")
-                  print(json.dumps({
-                      "deploy_run_id": run.get("id"),
-                      "status": status,
-                      "conclusion": conclusion,
-                  }))
-                  if status == "completed":
-                      if conclusion != "success":
-                          raise SystemExit(f"Deploy workflow failed for {target_sha}: {conclusion}")
-                      break
+          def latest_run(workflow_file: str):
+            endpoint = f"repos/{repo}/actions/workflows/{workflow_file}/runs?head_sha={target_sha}&per_page=5"
+            output = subprocess.check_output(["gh", "api", endpoint], text=True)
+            runs = json.loads(output).get("workflow_runs", [])
+            return runs[0] if runs else None
+
+          for attempt in range(60):
+            deploy_run = latest_run(workflows["deploy"])
+            build_run = latest_run(workflows["build"])
+            if build_run:
+              seen_build = True
+
+            print(json.dumps({
+              "deploy": deploy_run and {
+                "id": deploy_run.get("id"),
+                "status": deploy_run.get("status"),
+                "conclusion": deploy_run.get("conclusion"),
+              },
+              "build": build_run and {
+                "id": build_run.get("id"),
+                "status": build_run.get("status"),
+                "conclusion": build_run.get("conclusion"),
+              },
+            }))
+
+            if not deploy_run:
               time.sleep(10)
+              continue
+            if deploy_run.get("status") != "completed":
+              time.sleep(10)
+              continue
+            if deploy_run.get("conclusion") != "success":
+              raise SystemExit(f"Deploy workflow failed for {target_sha}: {deploy_run.get('conclusion')}")
+
+            if seen_build:
+              if build_run and build_run.get("status") == "completed":
+                if build_run.get("conclusion") != "success":
+                  raise SystemExit(f"Inference build workflow failed for {target_sha}: {build_run.get('conclusion')}")
+                break
+            elif attempt >= optional_after:
+              break
+
+            time.sleep(10)
           else:
-              raise SystemExit(f"Timed out waiting for deploy workflow on {target_sha}")
+            raise SystemExit(f"Timed out waiting for prerequisite workflows on {target_sha}")
           PY
 
       - name: Run live smoke
