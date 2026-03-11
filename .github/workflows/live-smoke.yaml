@@ -8,7 +8,6 @@ on:
       - '.github/workflows/live-smoke.yaml'
       - 'scripts/live_smoke.py'
       - 'deploy-api/**'
-      - 'inference/**'
   workflow_dispatch:
     inputs:
       modalities:
