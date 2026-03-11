@@ -162,14 +162,13 @@ class Settings(BaseSettings):
         description="Default Runpod locations (comma-separated)",
     )
     runpod_workers_min: int = Field(
-        default=0,
-        ge=0,
+        default=1,
+        ge=1,
         le=10,
         description=(
             "Minimum warm workers per endpoint. "
-            "0 = no idle cost (cold start on each job, ~40-60s for large models). "
-            "1 = one always-warm worker (~$0.35-0.80/hr idle cost per deployment). "
-            "Use 1 only when sub-second response latency is required."
+            "1 = one worker starts during deployment so readiness can be observed before accepting jobs. "
+            "Higher values trade extra idle GPU cost for lower burst latency."
         ),
     )
     runpod_workers_min_video: int = Field(

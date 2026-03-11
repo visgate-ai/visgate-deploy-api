@@ -142,5 +142,5 @@ def test_shared_cache_allowlist_includes_validated_audio_and_video_models() -> N
 
 def test_video_workers_min_defaults_to_one() -> None:
     s = Settings()
-    assert s.runpod_workers_min == 0
+    assert s.runpod_workers_min == 1
     assert s.runpod_workers_min_video == 1

@@ -346,7 +346,7 @@ async def test_video_deployment_uses_warm_worker_and_extended_load_wait(monkeypa
     get_settings.cache_clear()
     monkeypatch.setenv("RUNPOD_TEMPLATE_ID_VIDEO", "tpl-video")
     monkeypatch.setenv("DOCKER_IMAGE_VIDEO", "visgateai/inference-video:latest")
-    monkeypatch.setenv("RUNPOD_WORKERS_MIN", "0")
+    monkeypatch.setenv("RUNPOD_WORKERS_MIN", "1")
     monkeypatch.setenv("RUNPOD_WORKERS_MIN_VIDEO", "1")
     monkeypatch.setenv("RUNPOD_WORKERS_MAX", "1")
     monkeypatch.setenv("RUNPOD_EXECUTION_TIMEOUT_MS_VIDEO", "900000")
