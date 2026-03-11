@@ -67,10 +67,23 @@ def request_cleanup(reason: str) -> None:
 
 
 def job_s3_config(job: dict[str, Any], job_input: dict[str, Any]) -> dict[str, Any] | None:
-    raw = job.get("s3Config") or job_input.get("s3Config")
+    raw = (
+        job.get("s3Config")
+        or job_input.get("s3Config")
+        or job.get("outputS3Config")
+        or job_input.get("outputS3Config")
+        or job.get("s3_config")
+        or job_input.get("s3_config")
+    )
     if not isinstance(raw, dict) or not raw:
         return None
-    return raw
+    return {
+        "accessId": raw.get("accessId") or raw.get("access_id") or raw.get("aws_access_key_id"),
+        "accessSecret": raw.get("accessSecret") or raw.get("access_secret") or raw.get("aws_secret_access_key"),
+        "bucketName": raw.get("bucketName") or raw.get("bucket_name"),
+        "endpointUrl": raw.get("endpointUrl") or raw.get("endpoint_url"),
+        "keyPrefix": raw.get("keyPrefix") or raw.get("key_prefix"),
+    }
 
 
 def _worker_r2_credentials() -> tuple[str, str, str]:
@@ -170,6 +183,7 @@ def upload_bytes(
         extension=extension,
     )
     if not upload_target:
+        log_tunnel("WARNING", f"Artifact upload skipped: missing output S3 config for extension={extension}")
         return None
 
     tmp_path = ""
