@@ -362,6 +362,34 @@ def _list_prefix(client: Any, bucket: str, prefix: str) -> list[str]:
     return [item["Key"] for item in response.get("Contents", [])]
 
 
+def _wait_for_output_artifact(
+    artifact: dict[str, Any],
+    output_destination: dict[str, Any],
+    *,
+    timeout_seconds: int = 120,
+    poll_interval_seconds: int = 5,
+) -> tuple[bool, list[str]]:
+    artifact_key = str(artifact.get("key") or "").strip()
+    prefix = str(output_destination.get("key_prefix") or "").strip("/")
+    deadline = time.time() + timeout_seconds
+    listed: list[str] = []
+
+    while time.time() < deadline:
+        if artifact_key and _head_object(OUTPUT_R2_CLIENT, OUTPUT_BUCKET, artifact_key):
+            return True, [artifact_key]
+        if prefix:
+            listed = _list_prefix(OUTPUT_R2_CLIENT, OUTPUT_BUCKET, prefix)
+            if listed:
+                return True, listed
+        time.sleep(poll_interval_seconds)
+
+    if artifact_key and _head_object(OUTPUT_R2_CLIENT, OUTPUT_BUCKET, artifact_key):
+        return True, [artifact_key]
+    if prefix:
+        listed = _list_prefix(OUTPUT_R2_CLIENT, OUTPUT_BUCKET, prefix)
+    return False, listed
+
+
 def _cloud_log_seen(deployment_id: str, started_at_iso: str) -> bool:
     if not GCP_PROJECT_ID:
         return False
@@ -623,14 +651,10 @@ def _deployment_and_job(modality: str) -> dict[str, Any]:
             if not isinstance(artifact, dict):
                 raise RuntimeError(f"{modality} job missing artifact metadata: {job_final}")
             result["artifact"] = artifact
-            artifact_key = artifact.get("key")
-            if artifact_key:
-                result["output_verified"] = _head_object(OUTPUT_R2_CLIENT, OUTPUT_BUCKET, artifact_key)
-            else:
-                prefix = ((job_final.get("output_destination") or {}).get("key_prefix") or "").strip("/")
-                listed = _list_prefix(OUTPUT_R2_CLIENT, OUTPUT_BUCKET, prefix) if prefix else []
-                result["output_listed_keys"] = listed
-                result["output_verified"] = bool(listed)
+            output_destination = job_final.get("output_destination") or {}
+            verified, listed = _wait_for_output_artifact(artifact, output_destination)
+            result["output_listed_keys"] = listed
+            result["output_verified"] = verified
             if not result["output_verified"]:
                 raise RuntimeError(f"{modality} output object could not be verified in R2 output bucket")
 
