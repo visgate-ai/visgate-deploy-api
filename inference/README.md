@@ -44,6 +44,7 @@ All fields except `input.prompt` are optional. In production, deploy-api stages 
 GitHub Actions publishes separate `latest` images for image, audio, and video worker profiles before the live smoke workflow runs.
 The live smoke workflow now pre-caches the smoke models through the internal cache-task endpoint before provisioning deployments.
 That avoids repeated cold-start timeouts on GitHub-hosted runners when RunPod has to fetch large model weights from Hugging Face first.
+The cache upload path is derived from the configured platform model base URL, so the smoke job warms the same R2 bucket and prefix that production deployments read from.
 Webhook validation uses a temporary `cloudflared` receiver so the smoke job can verify the actual callback payloads, while the harness still deletes prior smoke deployments to protect limited RunPod worker quota.
 
 ## Job output
