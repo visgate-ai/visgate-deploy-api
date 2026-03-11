@@ -131,6 +131,54 @@ def _extract_key(value: Any) -> str | None:
     return None
 
 
+def _lookup_artifact_from_destination(destination: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not destination:
+        return None
+    bucket_name = destination.get("bucket_name")
+    endpoint_url = destination.get("endpoint_url")
+    key_prefix = str(destination.get("key_prefix") or "").strip("/")
+    if not bucket_name or not endpoint_url or not key_prefix:
+        return None
+
+    try:
+        import boto3  # type: ignore
+
+        from src.core.config import get_settings
+
+        settings = get_settings()
+        if not settings.r2_access_key_id_rw or not settings.r2_secret_access_key_rw:
+            return None
+
+        client = boto3.client(
+            "s3",
+            endpoint_url=endpoint_url,
+            aws_access_key_id=settings.r2_access_key_id_rw,
+            aws_secret_access_key=settings.r2_secret_access_key_rw,
+            region_name="auto",
+        )
+        response = client.list_objects_v2(Bucket=bucket_name, Prefix=key_prefix)
+        candidates = [item for item in response.get("Contents", []) if item.get("Key") and not str(item.get("Key")).endswith("/")]
+        if not candidates:
+            return None
+        candidates.sort(key=lambda item: item.get("LastModified") or datetime.min.replace(tzinfo=UTC), reverse=True)
+        selected = candidates[0]
+        key = selected.get("Key")
+        if not key:
+            return None
+
+        head = client.head_object(Bucket=bucket_name, Key=key)
+        return {
+            "bucket_name": bucket_name,
+            "endpoint_url": endpoint_url,
+            "key": key,
+            "url": f"{endpoint_url.rstrip('/')}/{bucket_name}/{key}",
+            "content_type": head.get("ContentType"),
+            "bytes": head.get("ContentLength"),
+        }
+    except Exception:
+        return None
+
+
 def extract_artifact_metadata(output: Any, destination: dict[str, Any] | None) -> dict[str, Any] | None:
     if output is None and not destination:
         return None
@@ -162,6 +210,15 @@ def extract_artifact_metadata(output: Any, destination: dict[str, Any] | None) -
     if artifact["url"] and not artifact["key"]:
         parsed = urlparse(artifact["url"])
         artifact["key"] = parsed.path.lstrip("/") or None
+    if not artifact.get("key"):
+        fallback = _lookup_artifact_from_destination(destination)
+        if fallback:
+            artifact["bucket_name"] = artifact["bucket_name"] or fallback.get("bucket_name")
+            artifact["endpoint_url"] = artifact["endpoint_url"] or fallback.get("endpoint_url")
+            artifact["key"] = fallback.get("key")
+            artifact["url"] = artifact["url"] or fallback.get("url")
+            artifact["content_type"] = artifact["content_type"] or fallback.get("content_type")
+            artifact["bytes"] = artifact["bytes"] or fallback.get("bytes")
     if not any(artifact.values()):
         return None
     return artifact
