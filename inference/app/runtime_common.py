@@ -78,11 +78,23 @@ def job_s3_config(job: dict[str, Any], job_input: dict[str, Any]) -> dict[str, A
     if not isinstance(raw, dict) or not raw:
         return None
     return {
-        "accessId": raw.get("accessId") or raw.get("access_id") or raw.get("aws_access_key_id"),
-        "accessSecret": raw.get("accessSecret") or raw.get("access_secret") or raw.get("aws_secret_access_key"),
-        "bucketName": raw.get("bucketName") or raw.get("bucket_name"),
+        "accessId": (
+            raw.get("accessId")
+            or raw.get("access_id")
+            or raw.get("accessKeyId")
+            or raw.get("accessKey")
+            or raw.get("aws_access_key_id")
+        ),
+        "accessSecret": (
+            raw.get("accessSecret")
+            or raw.get("access_secret")
+            or raw.get("secretAccessKey")
+            or raw.get("secretKey")
+            or raw.get("aws_secret_access_key")
+        ),
+        "bucketName": raw.get("bucketName") or raw.get("bucket_name") or raw.get("bucket"),
         "endpointUrl": raw.get("endpointUrl") or raw.get("endpoint_url"),
-        "keyPrefix": raw.get("keyPrefix") or raw.get("key_prefix"),
+        "keyPrefix": raw.get("keyPrefix") or raw.get("key_prefix") or raw.get("prefix"),
     }
 
 
@@ -176,6 +188,7 @@ def upload_bytes(
     *,
     content_type: str,
     extension: str,
+    required: bool = False,
 ) -> Optional[dict[str, Any]]:
     s3_config = job_s3_config(job, job_input)
     upload_target, bucket_name, endpoint_url, object_key, object_url = artifact_target(
@@ -183,7 +196,10 @@ def upload_bytes(
         extension=extension,
     )
     if not upload_target:
-        log_tunnel("WARNING", f"Artifact upload skipped: missing output S3 config for extension={extension}")
+        message = f"Artifact upload skipped: missing output S3 config for extension={extension}"
+        log_tunnel("WARNING", message)
+        if required:
+            raise RuntimeError(message)
         return None
 
     tmp_path = ""
@@ -213,6 +229,7 @@ def upload_bytes(
         url = object_url or upload_target
         if CDN_BASE_URL and object_key:
             url = f"{CDN_BASE_URL.rstrip('/')}/{object_key}"
+        log_tunnel("INFO", f"Artifact uploaded: {object_key}")
         return {
             "bucket_name": bucket_name,
             "endpoint_url": endpoint_url,
@@ -224,6 +241,8 @@ def upload_bytes(
     except Exception as exc:
         log_tunnel("ERROR", f"Artifact upload failed: {exc}")
         print(f"Artifact upload failed: {exc}")
+        if required:
+            raise RuntimeError(f"Artifact upload failed: {exc}") from exc
         return None
     finally:
         try:

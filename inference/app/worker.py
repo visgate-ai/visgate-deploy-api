@@ -221,16 +221,28 @@ def _handle_image(job: dict[str, Any], job_input: dict[str, Any]) -> dict[str, A
         # S3 enforced
         if result.get("image_base64"):
             data = base64.b64decode(result["image_base64"])
-            artifact = upload_bytes(data, job, job_input, content_type="image/png", extension="png")
-            if artifact:
-                result["artifact"] = artifact
+            artifact = upload_bytes(
+                data,
+                job,
+                job_input,
+                content_type="image/png",
+                extension="png",
+                required=True,
+            )
+            result["artifact"] = artifact
             result.pop("image_base64", None)  # Force remove base64
         elif result.get("file_path"):
             with open(result["file_path"], "rb") as f:
                 data = f.read()
-            artifact = upload_bytes(data, job, job_input, content_type=result.get("content_type", "image/png"), extension=result.get("file_extension", "png").lstrip("."))
-            if artifact:
-                result["artifact"] = artifact
+            artifact = upload_bytes(
+                data,
+                job,
+                job_input,
+                content_type=result.get("content_type", "image/png"),
+                extension=result.get("file_extension", "png").lstrip("."),
+                required=True,
+            )
+            result["artifact"] = artifact
             # Cleanup temp file from pipeline
             if os.path.exists(result["file_path"]):
                 os.remove(result["file_path"])
@@ -293,14 +305,20 @@ def _handle_video(job: dict[str, Any], job_input: dict[str, Any]) -> dict[str, A
         if tmp_name and os.path.exists(tmp_name):
             os.remove(tmp_name)
 
-    artifact = upload_bytes(video_bytes, job, job_input, content_type="video/mp4", extension="mp4")
+    artifact = upload_bytes(
+        video_bytes,
+        job,
+        job_input,
+        content_type="video/mp4",
+        extension="mp4",
+        required=True,
+    )
 
     payload: dict[str, Any] = {
         "model_id": HF_MODEL_ID,
         "frame_count": frame_count,
+        "artifact": artifact,
     }
-    if artifact:
-        payload["artifact"] = artifact
     return payload
 
 
@@ -319,7 +337,14 @@ def _handle_audio(job: dict[str, Any], job_input: dict[str, Any]) -> dict[str, A
         buffer = io.BytesIO()
         sf.write(buffer, audio, sampling_rate, format="WAV")
         raw_bytes = buffer.getvalue()
-        artifact = upload_bytes(raw_bytes, job, job_input, content_type="audio/wav", extension="wav")
+        artifact = upload_bytes(
+            raw_bytes,
+            job,
+            job_input,
+            content_type="audio/wav",
+            extension="wav",
+            required=True,
+        )
         return {
             "model_id": HF_MODEL_ID,
             "task": "text_to_speech",
