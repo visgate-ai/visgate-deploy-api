@@ -5,8 +5,9 @@ accelerate>=0.33.0
 safetensors>=0.4.0
 hf_transfer>=0.1.4
 boto3==1.36.0
-torch>=2.4.0
-torchaudio>=2.4.0
+# torch and torchaudio are provided by the base image (runpod/pytorch:2.4.0).
+# Do NOT reinstall them here; pip-upgrading torch creates duplicate class objects
+# that break infer_schema in diffusers (torch.Tensor identity mismatch).
 imageio>=2.34.0
 imageio-ffmpeg>=0.5.1
 librosa>=0.10.1
