@@ -156,6 +156,18 @@ def model_s3_url(base_url: str, model_id: str) -> str:
     return f"{base_url.rstrip('/')}/{slug}"
 
 
+def split_s3_url(s3_url: str) -> tuple[str, str]:
+    """Return (bucket, key_prefix) from an s3://bucket/prefix URL."""
+    normalized = (s3_url or "").strip()
+    if normalized.startswith("s3://"):
+        normalized = normalized[5:]
+    normalized = normalized.strip("/")
+    if not normalized:
+        raise ValueError("s3_url must include a bucket")
+    bucket, _, prefix = normalized.partition("/")
+    return bucket, prefix.strip("/")
+
+
 def add_model_to_manifest(
     model_id: str,
     endpoint_url: str,

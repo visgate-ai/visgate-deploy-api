@@ -30,7 +30,7 @@ from src.services.inference_jobs import (
 )
 from src.services.log_tunnel import append_live_log
 from src.services.provider_factory import get_provider
-from src.services.r2_manifest import add_model_to_manifest, fetch_cached_model_ids, model_s3_url
+from src.services.r2_manifest import add_model_to_manifest, fetch_cached_model_ids, model_s3_url, split_s3_url
 from src.services.secret_cache import get_secrets
 from src.services.webhook import notify
 
@@ -103,18 +103,20 @@ def _cache_model_once(hf_model_id: str, hf_token: str | None) -> dict[str, objec
     from huggingface_hub import RepoFile, list_repo_tree
 
     settings = get_settings()
+    model_bucket, model_prefix = split_s3_url(settings.r2_model_base_url)
 
     cached_ids = fetch_cached_model_ids(
         endpoint_url=settings.r2_endpoint_url,
         access_key_id=settings.r2_access_key_id_rw,
         secret_access_key=settings.r2_secret_access_key_rw,
+        bucket=model_bucket,
         force_refresh=True,
     )
     if hf_model_id in cached_ids:
         return {"status": "already_cached", "files_uploaded": 0, "manifest_updated": True}
 
     model_slug = hf_model_id.replace("/", "--")
-    s3_prefix = f"models/{model_slug}"
+    s3_prefix = f"{model_prefix}/{model_slug}" if model_prefix else model_slug
     s3 = boto3.client(
         "s3",
         endpoint_url=settings.r2_endpoint_url,
@@ -148,7 +150,7 @@ def _cache_model_once(hf_model_id: str, hf_token: str | None) -> dict[str, objec
 
         s3_key = f"{s3_prefix}/{file_path}"
         file_size = int(resp.headers.get("Content-Length", 0)) or None
-        s3.upload_fileobj(resp.raw, "visgate-models", s3_key, Config=transfer_cfg)
+        s3.upload_fileobj(resp.raw, model_bucket, s3_key, Config=transfer_cfg)
         file_count += 1
         _task_log("INFO", f"Streamed to R2: {file_path}", s3_key=s3_key, size_bytes=file_size)
 
@@ -161,6 +163,7 @@ def _cache_model_once(hf_model_id: str, hf_token: str | None) -> dict[str, objec
         endpoint_url=settings.r2_endpoint_url,
         access_key_id=settings.r2_access_key_id_rw,
         secret_access_key=settings.r2_secret_access_key_rw,
+        bucket=model_bucket,
     )
     if not manifest_updated:
         raise RuntimeError("manifest update failed after model upload")

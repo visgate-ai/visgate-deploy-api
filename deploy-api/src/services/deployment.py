@@ -26,6 +26,7 @@ from src.services.provider_factory import get_provider
 from src.services.r2_manifest import (
     fetch_cached_model_ids,
     model_s3_url,
+    split_s3_url,
 )
 from src.services.runpod import create_serverless_template
 from src.services.secret_cache import get_secrets
@@ -308,6 +309,7 @@ async def orchestrate_deployment(
         computed_s3_model_url: str | None = None
         trigger_cache_model_task: bool = False
         if settings.r2_access_key_id_rw and settings.r2_endpoint_url and _uses_shared_model_cache(worker_target["profile"]):
+            model_bucket, _ = split_s3_url(settings.r2_model_base_url)
             per_model_url = model_s3_url(settings.r2_model_base_url, runtime_hf_model_id)
             update_deployment(client, coll, deployment_id, {"status": "checking_r2_cache"})
             log_step(
@@ -320,6 +322,7 @@ async def orchestrate_deployment(
                 settings.r2_endpoint_url,
                 settings.r2_access_key_id_rw,
                 settings.r2_secret_access_key_rw,
+                bucket=model_bucket,
             )
             if runtime_hf_model_id in cached_ids:
                 computed_s3_model_url = per_model_url

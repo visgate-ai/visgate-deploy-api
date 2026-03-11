@@ -12,7 +12,7 @@ from src.api.dependencies import RequestContext, get_request_context
 from src.core.config import get_settings
 from src.models.model_specs_registry import MODEL_SPECS_REGISTRY
 from src.models.schemas import HFModelResult, HFModelSearchResponse, ModelEntry, ModelsListResponse
-from src.services.r2_manifest import fetch_cached_model_ids
+from src.services.r2_manifest import fetch_cached_model_ids, split_s3_url
 
 logger = logging.getLogger(__name__)
 
@@ -36,10 +36,12 @@ async def list_models() -> ModelsListResponse:
         and settings.r2_access_key_id_ro
         and settings.r2_secret_access_key_ro
     ):
+        model_bucket, _ = split_s3_url(settings.r2_model_base_url)
         cached_ids = fetch_cached_model_ids(
             endpoint_url=settings.r2_endpoint_url,
             access_key_id=settings.r2_access_key_id_ro,
             secret_access_key=settings.r2_secret_access_key_ro,
+            bucket=model_bucket,
         )
     else:
         logger.debug("R2 read-only credentials not configured; skipping manifest fetch")
