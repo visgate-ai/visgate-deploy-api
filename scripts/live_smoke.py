@@ -181,26 +181,29 @@ def _find_free_port() -> int:
 
 
 def _wait_for_tunnel_url(process: subprocess.Popen[str], *, timeout_seconds: int = 60) -> str:
-    assert process.stderr is not None
+    assert process.stdout is not None
     deadline = time.time() + timeout_seconds
+    collected: list[str] = []
     while time.time() < deadline:
-        line = process.stderr.readline()
+        line = process.stdout.readline()
         if not line:
             if process.poll() is not None:
                 break
             continue
+        collected.append(line)
         marker = "trycloudflare.com"
         if marker in line:
             for token in line.split():
                 if token.startswith("https://") and marker in token:
                     return token.rstrip()
-    stderr_tail = ""
-    if process.stderr is not None:
+    stream_tail = ""
+    if process.stdout is not None:
         try:
-            stderr_tail = process.stderr.read()
+            stream_tail = process.stdout.read()
         except Exception:
-            stderr_tail = ""
-    raise RuntimeError(f"Timed out waiting for cloudflared tunnel URL; stderr={stderr_tail[-500:]}")
+            stream_tail = ""
+    combined = "".join(collected) + stream_tail
+    raise RuntimeError(f"Timed out waiting for cloudflared tunnel URL; output={combined[-500:]}")
 
 
 def _start_webhook_capture() -> WebhookCapture:
@@ -214,9 +217,17 @@ def _start_webhook_capture() -> WebhookCapture:
         return WebhookCapture(server=server, thread=thread, base_url=configured_base)
 
     process = subprocess.Popen(
-        ["cloudflared", "tunnel", "--url", f"http://127.0.0.1:{port}", "--no-autoupdate"],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.PIPE,
+        [
+            "cloudflared",
+            "tunnel",
+            "--url",
+            f"http://127.0.0.1:{port}",
+            "--no-autoupdate",
+            "--loglevel",
+            "info",
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
         text=True,
     )
     base_url = _wait_for_tunnel_url(process)
