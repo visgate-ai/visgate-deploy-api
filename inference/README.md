@@ -42,9 +42,9 @@ New model families can be added by adding a pipeline class in `pipelines/` and r
 All fields except `input.prompt` are optional. In production, deploy-api stages media inputs into platform R2 and injects platform-managed output storage, so callers do not provide `s3Config`.
 
 GitHub Actions publishes separate `latest` images for image, audio, and video worker profiles before the live smoke workflow runs.
-The smoke workflow verifies webhook delivery from Cloud Run logs instead of depending on an inbound tunnel receiver.
-That keeps the CI smoke path deterministic on GitHub-hosted runners while still validating webhook success end to end from the sender side.
-The smoke harness also deletes prior smoke deployments before provisioning new endpoints so repeated CI runs do not consume the limited RunPod worker quota.
+The live smoke workflow now pre-caches the smoke models through the internal cache-task endpoint before provisioning deployments.
+That avoids repeated cold-start timeouts on GitHub-hosted runners when RunPod has to fetch large model weights from Hugging Face first.
+Webhook validation uses a temporary `cloudflared` receiver so the smoke job can verify the actual callback payloads, while the harness still deletes prior smoke deployments to protect limited RunPod worker quota.
 
 ## Job output
 
