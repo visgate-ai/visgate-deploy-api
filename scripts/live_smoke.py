@@ -471,7 +471,16 @@ def _ensure_model_cached(modality: str) -> dict[str, Any]:
         result["cache_status"] = "already_cached"
         result["cached_after"] = True
         return result
-    cache_response = _cache_model(model_id, modality)
+
+    cache_response: dict[str, Any] | None = None
+    try:
+        cache_response = _cache_model(model_id, modality)
+    except Exception as exc:
+        result["cache_status"] = "best_effort_failed"
+        result["cache_error"] = str(exc)
+        result["cached_after"] = _model_cached(model_id)
+        return result
+
     if cache_response is not None:
         result["cache_response"] = cache_response
         result["cache_status"] = str(cache_response.get("status", "unknown"))
