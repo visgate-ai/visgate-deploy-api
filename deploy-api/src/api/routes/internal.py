@@ -5,8 +5,12 @@ import fnmatch
 import json
 import os
 import time
-from datetime import UTC, datetime
-from typing import Annotated, Any
+from datetime import datetime, timezone
+
+UTC = timezone.utc
+from typing import Any
+
+from typing_extensions import Annotated
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from pydantic import BaseModel

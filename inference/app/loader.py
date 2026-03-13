@@ -1,7 +1,9 @@
+from __future__ import annotations
+
 import os
 import subprocess
 import time
-from typing import Any
+from typing import Any, Dict, Optional, Tuple
 
 
 def _log(level: str, message: str) -> None:
@@ -112,7 +114,7 @@ def sync_from_s3(s3_url: str, local_path: str) -> bool:
         return False
 
 
-def load_pipeline_optimized(model_id: str, token: str = None, device: str = "cuda") -> tuple[Any, bool, dict[str, float | bool | None]]:
+def load_pipeline_optimized(model_id: str, token: str = None, device: str = "cuda") -> Tuple[Any, bool, Dict[str, Optional[float]]]:
     """
     Load pipeline with S3 caching and persistent volume support.
 
@@ -146,7 +148,7 @@ def load_pipeline_optimized(model_id: str, token: str = None, device: str = "cud
     )
 
 
-def resolve_model_source(model_id: str) -> tuple[str, bool, float | None, bool]:
+def resolve_model_source(model_id: str) -> Tuple[str, bool, Optional[float], bool]:
     """Return the effective model source path, preferring a synced S3 path when available."""
     s3_url = os.environ.get("S3_MODEL_URL")
     volume_path = os.environ.get("MODEL_CACHE_DIR", "/tmp/models")  # FAST-PATH: NVMe ephemeral
@@ -155,7 +157,7 @@ def resolve_model_source(model_id: str) -> tuple[str, bool, float | None, bool]:
     local_path = os.path.join(volume_path, model_name_slug)
 
     use_local = False
-    t_r2_sync_s: float | None = None
+    t_r2_sync_s: Optional[float] = None
     loaded_from_cache = False
     if s3_url:
         _log("INFO", f"S3_MODEL_URL set — attempting R2 sync: {s3_url}")

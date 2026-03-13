@@ -1,6 +1,8 @@
 """In-memory repository for deployments and inference jobs (non-persistent)."""
 import os
-from datetime import UTC, datetime
+from datetime import datetime, timezone
+
+UTC = timezone.utc
 from typing import Any
 
 from src.models.entities import DeploymentDoc, InferenceJobDoc

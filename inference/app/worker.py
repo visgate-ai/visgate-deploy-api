@@ -9,17 +9,19 @@ import sys
 import tempfile
 import threading
 import time
-from typing import Any, Optional
+from typing import Any, Optional, Dict
 
 import numpy as np
 import imageio.v2 as imageio
 import soundfile as sf
 import torch
+from PIL import Image, ImageDraw
 
 # Add project root for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app.config import (
+    ALLOW_VIDEO_SMOKE_IMAGE_FALLBACK,
     CLEANUP_FAILURE_THRESHOLD,
     CLEANUP_IDLE_TIMEOUT_SECONDS,
     DEFAULT_GUIDANCE_SCALE,
@@ -41,7 +43,6 @@ from app.runtime_common import (
     upload_bytes,
 )
 from app.task_detector import detect_task
-from PIL import Image
 
 _pipeline: Optional[Any] = None
 _load_error: Optional[str] = None
@@ -51,10 +52,14 @@ _task_kind: str = "text2img"
 _state_lock = threading.RLock()
 
 
+def _audio_smoke_fallback_enabled() -> bool:
+    return os.environ.get("ALLOW_AUDIO_SMOKE_FALLBACK", "false").strip().lower() == "true"
+
+
 def _notify_orchestrator(
     status: str,
-    message: str | None = None,
-    timings: dict[str, float | bool | None] | None = None,
+    message: Optional[str] = None,
+    timings: Optional[Dict[str, Optional[float]]] = None,
 ) -> None:
     if not VISGATE_WEBHOOK or not VISGATE_WEBHOOK.strip():
         return
@@ -96,6 +101,14 @@ def _runtime_video_model_id(model_id: str) -> str:
     return aliases.get(model_id, model_id)
 
 
+def _can_use_video_smoke_image_fallback(model_id: str) -> bool:
+    if not ALLOW_VIDEO_SMOKE_IMAGE_FALLBACK:
+        return False
+    model_id_lower = (model_id or "").lower()
+    video_markers = ("wan2", "cogvideo", "animatediff", "text-to-video", "t2v", "svd")
+    return not any(marker in model_id_lower for marker in video_markers)
+
+
 def _load_speech_to_text_pipeline(model_source: str) -> Any:
     from transformers import AutoModelForSpeechSeq2Seq, AutoProcessor, pipeline
 
@@ -122,6 +135,33 @@ def _load_speech_to_text_pipeline(model_source: str) -> Any:
     )
 
 
+def _render_video_smoke_frame(prompt: str, frame_index: int, frame_count: int, width: int, height: int) -> Image.Image:
+    width = max(int(width), 256)
+    height = max(int(height), 256)
+    phase = frame_index / max(frame_count - 1, 1)
+
+    x_grad = np.linspace(0, 1, width, dtype=np.float32)
+    y_grad = np.linspace(0, 1, height, dtype=np.float32)[:, None]
+    red = np.clip(70 + 140 * x_grad + 35 * np.sin(phase * np.pi * 2), 0, 255)
+    green = np.clip(40 + 160 * y_grad + 55 * phase, 0, 255)
+    blue = np.clip(120 + 80 * (1 - x_grad) + 60 * np.cos(phase * np.pi * 2), 0, 255)
+    frame = np.zeros((height, width, 3), dtype=np.uint8)
+    frame[..., 0] = red.astype(np.uint8)
+    frame[..., 1] = green.astype(np.uint8)
+    frame[..., 2] = blue.astype(np.uint8)
+
+    image = Image.fromarray(frame, mode="RGB")
+    draw = ImageDraw.Draw(image)
+    prompt_text = (prompt or "video smoke fallback").strip() or "video smoke fallback"
+    lines = [prompt_text[i:i + 42] for i in range(0, min(len(prompt_text), 126), 42)] or [prompt_text]
+    overlay_h = 36 + 20 * len(lines)
+    draw.rounded_rectangle((16, height - overlay_h - 16, width - 16, height - 16), radius=14, fill=(0, 0, 0, 165))
+    draw.text((28, height - overlay_h), f"Local video smoke · frame {frame_index + 1}/{frame_count}", fill=(255, 255, 255))
+    for idx, line in enumerate(lines[:3]):
+        draw.text((28, height - overlay_h + 20 + idx * 18), line, fill=(220, 235, 255))
+    return image
+
+
 def _load_model_background() -> None:
     global _pipeline, _load_error, _task_kind
 
@@ -144,10 +184,20 @@ def _load_model_background() -> None:
             loaded_pipeline = load_pipeline(model_id=effective_model_id, token=HF_TOKEN, device=DEVICE)
         
         elif task_kind == "text2video":
-            from diffusers import DiffusionPipeline
-            loaded_pipeline = DiffusionPipeline.from_pretrained(model_source, torch_dtype=_torch_dtype(), token=HF_TOKEN)
-            if DEVICE.startswith("cuda"):
-                loaded_pipeline.to(DEVICE)
+            if _can_use_video_smoke_image_fallback(effective_model_id):
+                loaded_pipeline = {
+                    "mode": "video_smoke_fallback",
+                    "model_id": effective_model_id,
+                    "model_source": model_source,
+                    "loaded_from_cache": loaded_from_cache,
+                }
+                log_tunnel("INFO", f"Using image-to-video smoke fallback for model: {effective_model_id}")
+            else:
+                from diffusers import DiffusionPipeline
+
+                loaded_pipeline = DiffusionPipeline.from_pretrained(model_source, torch_dtype=_torch_dtype(), token=HF_TOKEN)
+                if DEVICE.startswith("cuda"):
+                    loaded_pipeline.to(DEVICE)
                 
         elif task_kind == "speech_to_text":
             loaded_pipeline = _load_speech_to_text_pipeline(model_source)
@@ -257,6 +307,44 @@ def _handle_video(job: dict[str, Any], job_input: dict[str, Any]) -> dict[str, A
     if not prompt:
         return {"error": "Missing or empty 'prompt' in input", "status": "failed"}
 
+    if isinstance(_pipeline, dict) and _pipeline.get("mode") == "video_smoke_fallback":
+        frame_count = max(int(job_input.get("num_frames", 8)), 4)
+        fps = int(job_input.get("fps", 8))
+        height = int(job_input.get("height") or 512)
+        width = int(job_input.get("width") or 512)
+
+        tmp_name = ""
+        with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as tmp:
+            tmp_name = tmp.name
+        try:
+            with imageio.get_writer(tmp_name, fps=fps) as writer:
+                for frame_index in range(frame_count):
+                    frame = _render_video_smoke_frame(str(prompt), frame_index, frame_count, width, height)
+                    writer.append_data(np.array(frame))
+            with open(tmp_name, "rb") as fh:
+                video_bytes = fh.read()
+        finally:
+            if tmp_name and os.path.exists(tmp_name):
+                os.remove(tmp_name)
+
+        artifact = upload_bytes(
+            video_bytes,
+            job,
+            job_input,
+            content_type="video/mp4",
+            extension="mp4",
+            required=True,
+        )
+
+        return {
+            "model_id": HF_MODEL_ID,
+            "frame_count": frame_count,
+            "fps": fps,
+            "artifact": artifact,
+            "smoke_fallback": True,
+            "model_source": _pipeline.get("model_source"),
+        }
+
     output = _pipeline(
         prompt=str(prompt),
         num_inference_steps=int(job_input.get("num_inference_steps", 16)),
@@ -324,6 +412,31 @@ def _handle_video(job: dict[str, Any], job_input: dict[str, Any]) -> dict[str, A
 
 def _handle_audio(job: dict[str, Any], job_input: dict[str, Any]) -> dict[str, Any]:
     if _task_kind == "text_to_speech":
+        if _audio_smoke_fallback_enabled():
+            sampling_rate = 22050
+            duration_seconds = float(job_input.get("duration_seconds", 1.25) or 1.25)
+            t = np.linspace(0, duration_seconds, int(sampling_rate * duration_seconds), endpoint=False)
+            audio = 0.15 * np.sin(2 * np.pi * 440 * t)
+
+            buffer = io.BytesIO()
+            sf.write(buffer, audio, sampling_rate, format="WAV")
+            raw_bytes = buffer.getvalue()
+            artifact = upload_bytes(
+                raw_bytes,
+                job,
+                job_input,
+                content_type="audio/wav",
+                extension="wav",
+                required=True,
+            )
+            return {
+                "model_id": HF_MODEL_ID,
+                "task": "text_to_speech",
+                "sampling_rate": sampling_rate,
+                "artifact": artifact,
+                "smoke_fallback": True,
+            }
+
         text = job_input.get("text") or job_input.get("prompt")
         if not text:
             return {"error": "Missing 'text' or 'prompt' in input", "status": "failed"}
@@ -353,6 +466,14 @@ def _handle_audio(job: dict[str, Any], job_input: dict[str, Any]) -> dict[str, A
         }
     else:
         # Speech to text
+        if _audio_smoke_fallback_enabled():
+            return {
+                "text": "local audio smoke transcript",
+                "model_id": HF_MODEL_ID,
+                "task": "speech_to_text",
+                "smoke_fallback": True,
+            }
+
         staged_audio = job_input.get("audio_r2")
         audio_url = job_input.get("audio_url") or job_input.get("audioUrl")
         temp_path = None

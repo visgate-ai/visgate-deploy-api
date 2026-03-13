@@ -1,0 +1,116 @@
+version: "2.4"
+
+services:
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin123
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  minio-init:
+    image: minio/mc:latest
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >-
+      /bin/sh -c '
+      mc alias set local http://minio:9000 minioadmin minioadmin123 &&
+      mc mb -p local/visgate-input || true &&
+      mc mb -p local/visgate-output || true &&
+      mc mb -p local/visgate-models || true'
+
+  deploy-api:
+    build:
+      context: ./deploy-api
+    environment:
+      GCP_PROJECT_ID: ""
+      USE_MEMORY_REPO: "true"
+      DEV_MODE: "true"
+      DEV_RUNPOD_KEY: local-runpod-key
+      INFERENCE_PROVIDER: local
+      LOCAL_WORKER_URL_IMAGE: http://local-image-worker:8000
+      LOCAL_WORKER_URL_AUDIO: http://local-audio-worker:8000
+      LOCAL_WORKER_URL_VIDEO: http://local-video-worker:8000
+      INTERNAL_WEBHOOK_BASE_URL: http://deploy-api:8080
+      INTERNAL_WEBHOOK_SECRET: local-internal-secret
+      ENABLE_ENDPOINT_REUSE: "false"
+      R2_ENDPOINT_URL: http://minio:9000
+      VISGATE_DEPLOY_API_INFERENCE_R2_ACCESS_KEY_ID_OUTPUT_RW: minioadmin
+      VISGATE_DEPLOY_API_INFERENCE_R2_SECRET_ACCESS_KEY_OUTPUT_RW: minioadmin123
+      VISGATE_DEPLOY_API_INFERENCE_R2_ACCESS_KEY_ID_INPUT_R: minioadmin
+      VISGATE_DEPLOY_API_INFERENCE_R2_SECRET_ACCESS_KEY_INPUT_R: minioadmin123
+      VISGATE_DEPLOY_API_INFERENCE_R2_BUCKET_NAME_INPUT: visgate-input
+      VISGATE_DEPLOY_API_INFERENCE_R2_BUCKET_NAME_OUTPUT: visgate-output
+      VISGATE_DEPLOY_API_S3_MODEL_URL_R2: s3://visgate-models/models
+      SHARED_CACHE_ENABLED: "true"
+      LOG_LEVEL: INFO
+    depends_on:
+      local-image-worker:
+        condition: service_started
+      local-audio-worker:
+        condition: service_started
+      local-video-worker:
+        condition: service_started
+      minio:
+        condition: service_healthy
+    ports:
+      - "8080:8080"
+
+  local-image-worker:
+    build:
+      context: ./inference
+      dockerfile: Dockerfile
+    command: ["uvicorn", "app.local_server:app", "--host", "0.0.0.0", "--port", "8000"]
+    environment:
+      PYTHONUNBUFFERED: "1"
+      HF_HUB_ENABLE_HF_TRANSFER: "1"
+      DEVICE: cuda
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+    ports:
+      - "8101:8000"
+    runtime: nvidia
+
+  local-audio-worker:
+    build:
+      context: ./inference
+      dockerfile: Dockerfile.audio
+    command: ["uvicorn", "app.local_server:app", "--host", "0.0.0.0", "--port", "8000"]
+    environment:
+      PYTHONUNBUFFERED: "1"
+      HF_HUB_ENABLE_HF_TRANSFER: "1"
+      DEVICE: cuda
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+    ports:
+      - "8102:8000"
+    runtime: nvidia
+
+  local-video-worker:
+    build:
+      context: ./inference
+      dockerfile: Dockerfile.video
+    command: ["uvicorn", "app.local_server:app", "--host", "0.0.0.0", "--port", "8000"]
+    environment:
+      PYTHONUNBUFFERED: "1"
+      HF_HUB_ENABLE_HF_TRANSFER: "1"
+      DEVICE: cuda
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+    ports:
+      - "8103:8000"
+    runtime: nvidia
+
+volumes:
+  minio-data:

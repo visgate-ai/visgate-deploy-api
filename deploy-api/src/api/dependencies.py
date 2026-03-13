@@ -4,7 +4,7 @@ import hashlib
 import time
 from collections import defaultdict
 from dataclasses import dataclass
-from typing import Annotated
+from typing_extensions import Annotated
 
 from fastapi import Depends, Header, HTTPException, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer

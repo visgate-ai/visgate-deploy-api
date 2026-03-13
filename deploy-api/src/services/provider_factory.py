@@ -10,6 +10,14 @@ def register_provider(name: str, provider: BaseInferenceProvider):
 def _bootstrap_default_providers() -> None:
     if "runpod" not in _providers:
         import src.services.runpod  # noqa: F401
+    if "local" not in _providers:
+        import src.services.local_provider  # noqa: F401
+
+
+def get_default_provider_name() -> str:
+    from src.core.config import get_settings
+
+    return (get_settings().inference_provider or "runpod").strip().lower()
 
 
 def get_provider(name: str = "runpod") -> BaseInferenceProvider:

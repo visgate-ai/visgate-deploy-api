@@ -30,7 +30,7 @@ CLEANUP_FAILURE_THRESHOLD: int = int(get_env("CLEANUP_FAILURE_THRESHOLD", "3") o
 RUNPOD_API_KEY: Optional[str] = get_env("RUNPOD_API_KEY")
 
 # Device
-DEVICE: str = "cuda"  # Runpod provides GPU
+DEVICE: str = get_env("DEVICE", "cuda") or "cuda"
 
 # Default inference
 DEFAULT_NUM_INFERENCE_STEPS: int = 28
@@ -42,4 +42,5 @@ OUTPUT_S3_URL: Optional[str] = get_env("OUTPUT_S3_URL")
 CDN_BASE_URL: Optional[str] = get_env("CDN_BASE_URL")
 RETURN_BASE64: str = get_env("RETURN_BASE64", "true") or "true"
 DEFAULT_OUTPUT_KEY_PREFIX: str = get_env("DEFAULT_OUTPUT_KEY_PREFIX", "visgate/jobs") or "visgate/jobs"
+ALLOW_VIDEO_SMOKE_IMAGE_FALLBACK: bool = (get_env("ALLOW_VIDEO_SMOKE_IMAGE_FALLBACK", "false") or "false").lower() == "true"
 

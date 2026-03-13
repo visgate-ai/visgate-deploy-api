@@ -1,5 +1,7 @@
 """Map HF model ID to pipeline class and load the right pipeline."""
 
+from __future__ import annotations
+
 import re
 from typing import Optional, Type
 

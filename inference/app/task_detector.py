@@ -1,7 +1,26 @@
+from __future__ import annotations
+
+from typing import Optional
+
+
 def detect_task(model_id: str, environ_task: str = "") -> str:
     environ_task = environ_task.strip().lower()
-    if environ_task in ["text2img", "image2img", "text2video", "video2video", "speech_to_text", "text_to_speech"]:
-        return environ_task
+    canonical_map = {
+        "text2img": "text2img",
+        "text_to_image": "text2img",
+        "image2img": "text2img",
+        "image_to_image": "text2img",
+        "text2video": "text2video",
+        "text_to_video": "text2video",
+        "video2video": "text2video",
+        "video_to_video": "text2video",
+        "video_edit": "text2video",
+        "speech_to_text": "speech_to_text",
+        "text_to_speech": "text_to_speech",
+    }
+    mapped_task = canonical_map.get(environ_task)
+    if mapped_task:
+        return mapped_task
 
     model_id_lower = model_id.lower()
     

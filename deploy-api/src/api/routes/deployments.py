@@ -2,8 +2,10 @@
 
 import asyncio
 import json
-from datetime import UTC, datetime, timedelta
-from typing import Annotated
+from datetime import datetime, timedelta, timezone
+
+UTC = timezone.utc
+from typing_extensions import Annotated
 
 from fastapi import APIRouter, Depends, Request, status
 from fastapi.responses import StreamingResponse
@@ -27,6 +29,7 @@ from src.services.deployment import mark_deployment_ready_and_notify
 from src.services.endpoint_naming import model_slug, pool_endpoint_name, user_endpoint_name
 from src.services.internal_urls import resolve_internal_base_url
 from src.services.log_tunnel import get_live_logs_since
+from src.services.worker_routing import resolve_worker_target
 
 def _get_repo():
     if get_settings().effective_use_memory_repo:
@@ -45,7 +48,7 @@ def set_deployment(*args, **kwargs):
     return _get_repo().set_deployment(*args, **kwargs)
 from src.services.model_capabilities import supports_task
 from src.services.pool_policy import choose_pool_policy
-from src.services.provider_factory import get_provider
+from src.services.provider_factory import get_default_provider_name, get_provider
 from src.services.secret_cache import store_secrets
 from src.services.tasks import enqueue_orchestration_task
 
@@ -162,7 +165,7 @@ async def list_gpus(
     ctx: Annotated[RequestContext, Depends(get_request_context)],
 ) -> GpuListResponse:
     """List available GPU types with VRAM and current pricing from RunPod."""
-    provider = get_provider("runpod")
+    provider = get_provider(get_default_provider_name())
     raw_gpus = await provider.list_gpu_types(ctx.runpod_api_key)
 
     gpus: list[GpuTypeInfo] = []
@@ -239,15 +242,18 @@ async def create_deployment(
     created_at = created_at_dt.isoformat().replace("+00:00", "Z")
     stream_url = _build_stream_url(deployment_id)
     internal_webhook_base_url = resolve_internal_base_url(request)
+    provider_name = get_default_provider_name()
 
     runpod_api_key = _resolve_runpod_key(body, ctx)
     if not runpod_api_key:
         raise InvalidDeploymentRequestError("Missing Runpod API key (Authorization header or user_runpod_key)")
-    if not body.hf_token:
+    if provider_name != "local" and not body.hf_token:
         raise InvalidDeploymentRequestError("hf_token is required and must belong to the caller")
 
     pool_policy = choose_pool_policy(hf_model_id)
-    provider = get_provider("runpod")
+    provider = get_provider(provider_name)
+    desired_worker_target = resolve_worker_target(settings, hf_model_id, body.task)
+    desired_worker_profile = desired_worker_target["profile"]
 
     # Runpod-native warm discovery
     warm_names = [user_endpoint_name(ctx.user_hash, hf_model_id)]
@@ -261,6 +267,10 @@ async def create_deployment(
             for ep in endpoints:
                 if ep.get("name") not in warm_names:
                     continue
+                if provider_name == "local":
+                    ep_profile = (ep.get("raw_response") or {}).get("profile")
+                    if ep_profile and ep_profile != desired_worker_profile:
+                        continue
                 if not _is_warm_status(ep.get("status", "")):
                     continue
 
@@ -301,7 +311,7 @@ async def create_deployment(
             ],
             created_at=created_at,
             user_hash=ctx.user_hash,
-            provider="runpod",
+            provider=provider_name,
             endpoint_name=warm_endpoint.get("name"),
             pool_policy=pool_policy.name,
             region=body.region,
@@ -336,7 +346,7 @@ async def create_deployment(
         gpu_tier=body.gpu_tier,
         created_at=created_at,
         user_hash=ctx.user_hash,
-        provider="runpod",
+        provider=provider_name,
         endpoint_name=user_endpoint_name(ctx.user_hash, hf_model_id),
         pool_policy=pool_policy.name,
         region=body.region,
@@ -348,12 +358,12 @@ async def create_deployment(
     store_secrets(
         deployment_id,
         runpod_api_key,
-        body.hf_token,
+        body.hf_token or "",
     )
     await enqueue_orchestration_task(
         deployment_id,
         runpod_api_key,
-        body.hf_token,
+        body.hf_token or "",
     )
     record_deployment_created()
 
@@ -498,7 +508,7 @@ async def get_deployment_cost(
     note: str | None = None
 
     if gpu_allocated:
-        provider = get_provider("runpod")
+        provider = get_provider(doc.provider or get_default_provider_name())
         try:
             gpu_types = await provider.list_gpu_types(ctx.runpod_api_key)
             for g in gpu_types:
@@ -545,15 +555,15 @@ async def delete_deployment(
         raise DeploymentNotFoundError(deployment_id)
     if doc.runpod_endpoint_id:
         try:
-            # For now default to runpod, but doc could store the provider name
-            provider = get_provider("runpod")
+            provider = get_provider(doc.provider or get_default_provider_name())
             await provider.delete_endpoint(doc.runpod_endpoint_id, ctx.runpod_api_key)
         except Exception:  # nosec B110 — best-effort cleanup, deletion failure must not block response
             pass
     if doc.runpod_dep_template_name:
         try:
-            provider = get_provider("runpod")
-            await provider.delete_template(doc.runpod_dep_template_name, ctx.runpod_api_key)
+            provider = get_provider(doc.provider or get_default_provider_name())
+            if hasattr(provider, "delete_template"):
+                await provider.delete_template(doc.runpod_dep_template_name, ctx.runpod_api_key)
         except Exception:  # nosec B110 — best-effort; template may still be in use briefly after endpoint deletion
             pass
     ref = firestore_client.collection(settings.firestore_collection_deployments).document(deployment_id)

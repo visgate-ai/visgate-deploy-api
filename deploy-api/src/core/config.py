@@ -100,6 +100,10 @@ class Settings(BaseSettings):
     )
 
     # Runpod
+    inference_provider: str = Field(
+        default="runpod",
+        description="Active inference backend: runpod or local.",
+    )
     docker_image: str = Field(
         default="visgateai/inference:latest",
         min_length=1,
@@ -223,6 +227,18 @@ class Settings(BaseSettings):
         ge=5000,
         le=604800000,
         description="RunPod execution timeout for video endpoint jobs in milliseconds",
+    )
+    local_worker_url_image: str = Field(
+        default="http://127.0.0.1:8101",
+        description="Base URL for the local image worker when inference_provider=local.",
+    )
+    local_worker_url_audio: str = Field(
+        default="http://127.0.0.1:8102",
+        description="Base URL for the local audio worker when inference_provider=local.",
+    )
+    local_worker_url_video: str = Field(
+        default="http://127.0.0.1:8103",
+        description="Base URL for the local video worker when inference_provider=local.",
     )
 
     # Webhook
@@ -411,6 +427,14 @@ class Settings(BaseSettings):
     def effective_use_memory_repo(self) -> bool:
         """True when memory repo should be used (explicit flag or no GCP project set)."""
         return self.use_memory_repo or not self.gcp_project_id
+
+    @field_validator("inference_provider", mode="before")
+    @classmethod
+    def validate_inference_provider(cls, value: str | None) -> str:
+        normalized = (value or "runpod").strip().lower()
+        if normalized not in {"runpod", "local"}:
+            raise ValueError("inference_provider must be one of ('runpod', 'local')")
+        return normalized
 
     def resolve_secrets(self) -> None:
         """Resolve Secret Manager references for sensitive settings."""

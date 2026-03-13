@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import logging
-from typing import Annotated, Any
+from typing import Any
+
+from typing_extensions import Annotated
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query

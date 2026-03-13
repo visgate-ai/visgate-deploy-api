@@ -8,7 +8,7 @@ import tempfile
 import time
 import urllib.request
 import uuid
-from typing import Any, Optional
+from typing import Any, Optional, Dict, Tuple
 
 from app.config import (
     CDN_BASE_URL,
@@ -30,7 +30,7 @@ def mask_sensitive(text: str) -> str:
     return text
 
 
-def post_json(url: str, payload: dict[str, Any], headers: dict[str, str] | None = None) -> None:
+def post_json(url: str, payload: dict[str, Any], headers: Optional[dict[str, str]] = None) -> None:
     import json
 
     req_headers = {"Content-Type": "application/json"}
@@ -66,7 +66,7 @@ def request_cleanup(reason: str) -> None:
         return
 
 
-def job_s3_config(job: dict[str, Any], job_input: dict[str, Any]) -> dict[str, Any] | None:
+def job_s3_config(job: dict[str, Any], job_input: dict[str, Any]) -> Optional[dict[str, Any]]:
     raw = (
         job.get("s3Config")
         or job_input.get("s3Config")
@@ -145,10 +145,10 @@ def download_r2_artifact_to_tempfile(artifact: dict[str, Any], suffix: str) -> s
 
 
 def artifact_target(
-    s3_config: dict[str, Any] | None,
+    s3_config: Optional[dict[str, Any]],
     *,
     extension: str,
-) -> tuple[str | None, str | None, str | None, str | None, str | None]:
+) -> Tuple[Optional[str], Optional[str], Optional[str], Optional[str], Optional[str]]:
     if not s3_config:
         return None, None, None, None, None
     bucket_name = s3_config.get("bucketName")

@@ -1,6 +1,8 @@
 """Firestore access for deployment documents and inference jobs."""
 
-from datetime import UTC, datetime
+from datetime import datetime, timezone
+
+UTC = timezone.utc
 
 from google.cloud import firestore  # type: ignore
 from google.cloud.firestore_v1.base_query import FieldFilter

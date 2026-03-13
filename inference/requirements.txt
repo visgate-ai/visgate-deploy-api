@@ -1,6 +1,8 @@
 runpod>=1.6.0
+fastapi>=0.109.0
+uvicorn[standard]>=0.27.0
 diffusers>=0.33.1
-transformers>=4.44.2,<5.0.0
+transformers==4.46.3
 accelerate>=0.33.0
 safetensors>=0.4.0
 hf_transfer>=0.1.4

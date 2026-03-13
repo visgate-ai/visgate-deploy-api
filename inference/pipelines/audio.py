@@ -1,5 +1,7 @@
 """Text-to-Audio pipeline."""
 
+from __future__ import annotations
+
 import os
 import uuid
 from typing import Any, Optional

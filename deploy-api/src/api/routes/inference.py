@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from typing import Annotated, Any
+from typing import Any
+
+from typing_extensions import Annotated
 
 from fastapi import APIRouter, Depends, Request, status
 

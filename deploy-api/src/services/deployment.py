@@ -2,7 +2,9 @@
 
 import asyncio
 import re
-from datetime import UTC, datetime
+from datetime import datetime, timezone
+
+UTC = timezone.utc
 
 import httpx
 
@@ -22,7 +24,7 @@ from src.core.telemetry import (
 from src.services.gpu_selection import select_gpu_candidates
 from src.services.huggingface import validate_model
 from src.services.internal_urls import build_deployment_ready_url, build_log_tunnel_url
-from src.services.provider_factory import get_provider
+from src.services.provider_factory import get_default_provider_name, get_provider
 from src.services.r2_manifest import (
     fetch_cached_model_ids,
     model_s3_url,
@@ -270,13 +272,12 @@ async def orchestrate_deployment(
 
         user_runpod_key = runpod_api_key
         gpu_tier = doc.gpu_tier
+        provider_name = doc.provider or get_default_provider_name()
         hf_token: str | None = hf_token_override or (cached.hf_token if cached else None)
-        if not hf_token:
+        if provider_name != "local" and not hf_token:
             update_deployment(client, coll, deployment_id, {"status": "failed", "error": "Missing Hugging Face token"})
             log_step("ERROR", "Missing Hugging Face token for orchestration")
             return
-        # Logic: Default to runpod for now, but could be fetched from doc metadata
-        provider_name = "runpod"
         provider = get_provider(provider_name)
 
         worker_target = resolve_worker_target(settings, requested_hf_model_id, doc.task)
@@ -358,6 +359,8 @@ async def orchestrate_deployment(
             env["TASK"] = doc.task
         if hf_token:
             env["HF_TOKEN"] = hf_token
+        if provider_name == "local":
+            env["ALLOW_AUDIO_SMOKE_FALLBACK"] = "true"
 
         # Worker receives the platform R2 read-only key for model and staged-input reads.
         effective_access_key = settings.r2_access_key_id_ro or ""
@@ -433,23 +436,33 @@ async def orchestrate_deployment(
         )
         # Build the env list for the per-deployment template (RunPod only injects
         # template-level env as container OS env vars; endpoint env is metadata only)
-        runpod_template_env = [{"key": k, "value": str(v)} for k, v in env.items()]
-        dep_template_id, dep_template_name = await _create_deployment_template(
-            api_key=user_runpod_key,
-            worker_profile=worker_target["profile"],
-            image=worker_target["image"],
-            deployment_id=deployment_id,
-            env=runpod_template_env,
-        )
-        update_deployment(client, coll, deployment_id, {"runpod_dep_template_name": dep_template_name})
-        log_step(
-            "INFO",
-            "Created per-deployment RunPod template with env",
-            worker_profile=worker_target["profile"],
-            dep_template_id=dep_template_id,
-            dep_template_name=dep_template_name,
-            image=worker_target["image"],
-        )
+        dep_template_id = ""
+        dep_template_name = None
+        if provider_name == "runpod":
+            runpod_template_env = [{"key": k, "value": str(v)} for k, v in env.items()]
+            dep_template_id, dep_template_name = await _create_deployment_template(
+                api_key=user_runpod_key,
+                worker_profile=worker_target["profile"],
+                image=worker_target["image"],
+                deployment_id=deployment_id,
+                env=runpod_template_env,
+            )
+            update_deployment(client, coll, deployment_id, {"runpod_dep_template_name": dep_template_name})
+            log_step(
+                "INFO",
+                "Created per-deployment RunPod template with env",
+                worker_profile=worker_target["profile"],
+                dep_template_id=dep_template_id,
+                dep_template_name=dep_template_name,
+                image=worker_target["image"],
+            )
+        else:
+            log_step(
+                "INFO",
+                "Using local worker backend; skipping RunPod template creation",
+                worker_profile=worker_target["profile"],
+                image=worker_target["image"],
+            )
 
         async def create_endpoint_for_gpu_ids(gpu_ids: list[str], workers_max: int):
             try:
@@ -457,7 +470,7 @@ async def orchestrate_deployment(
                     name=endpoint_name,
                     gpu_ids=gpu_ids,
                     image=worker_target["image"],
-                    env={},
+                    env=env if provider_name != "runpod" else {},
                     api_key=user_runpod_key,
                     template_id=dep_template_id,
                     execution_timeout_ms=execution_timeout_ms,
@@ -468,6 +481,7 @@ async def orchestrate_deployment(
                     scaler_value=settings.runpod_scaler_value,
                     volume_in_gb=settings.runpod_volume_size_gb,
                     locations=locations,
+                    worker_profile=worker_target["profile"],
                 )
             except Exception as exc:
                 allowed_workers_max = parse_worker_quota_limit(str(exc))
@@ -484,7 +498,7 @@ async def orchestrate_deployment(
                     name=endpoint_name,
                     gpu_ids=gpu_ids,
                     image=worker_target["image"],
-                    env={},
+                    env=env if provider_name != "runpod" else {},
                     api_key=user_runpod_key,
                     template_id=dep_template_id,
                     execution_timeout_ms=execution_timeout_ms,
@@ -495,6 +509,7 @@ async def orchestrate_deployment(
                     scaler_value=settings.runpod_scaler_value,
                     volume_in_gb=settings.runpod_volume_size_gb,
                     locations=locations,
+                    worker_profile=worker_target["profile"],
                 )
 
         endpoint_data = None

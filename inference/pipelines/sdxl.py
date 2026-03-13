@@ -1,5 +1,7 @@
 """SDXL and Stable Diffusion XL pipeline via diffusers AutoPipeline."""
 
+from __future__ import annotations
+
 import base64
 import io
 import os
