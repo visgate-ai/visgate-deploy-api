@@ -191,13 +191,13 @@ def test_get_inference_job_estimates_cost_from_gpu_price(
     set_deployment(
         firestore_mock,
         "deployments",
-        _ready_deployment_doc(runpod_key, gpu_allocated="AMPERE 24GB"),
+        _ready_deployment_doc(runpod_key, gpu_allocated="RTX A5000 24GB"),
     )
 
     provider = Mock()
     provider.list_gpu_types = AsyncMock(
         return_value=[
-            {"id": "AMPERE_24", "displayName": "AMPERE 24GB", "communityPrice": 0.5, "securePrice": 0.7}
+            {"id": "NVIDIA RTX A5000", "displayName": "RTX A5000 24GB", "communityPrice": 0.5, "securePrice": 0.7}
         ]
     )
     provider.submit_job = AsyncMock(return_value={"id": "rp_job_3", "status": "IN_QUEUE", "raw_response": {}})

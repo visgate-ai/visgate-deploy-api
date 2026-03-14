@@ -339,10 +339,19 @@ async def orchestrate_deployment(
         elif trigger_cache_model_task:
             log_step("INFO", "R2 cache miss — separate job will download and cache")
 
-        # 2. Select GPU
+        # 2. Select GPU — prefer live RunPod registry, fallback to Firestore, then static defaults
         update_deployment(client, coll, deployment_id, {"status": "selecting_gpu"})
-        registry = get_gpu_registry(client, settings.firestore_collection_gpu_registry)
-        tier_mapping = get_tier_mapping(client, settings.firestore_collection_gpu_tiers)
+
+        from src.services.gpu_registry import derive_tier_mapping, fetch_live_gpu_registry
+
+        live_registry = await fetch_live_gpu_registry(user_runpod_key)
+        if live_registry:
+            registry = live_registry
+            tier_mapping = derive_tier_mapping(live_registry)
+            log_step("INFO", f"Using live RunPod GPU registry ({len(registry)} GPUs)")
+        else:
+            registry = get_gpu_registry(client, settings.firestore_collection_gpu_registry)
+            tier_mapping = get_tier_mapping(client, settings.firestore_collection_gpu_tiers)
         gpu_candidates = select_gpu_candidates(vram_gb, gpu_tier, registry=registry, tier_mapping=tier_mapping)
         gpu_id, gpu_display = gpu_candidates[0]
         log_step(
@@ -422,8 +431,8 @@ async def orchestrate_deployment(
             },
         )
 
-        # MULTI-GPU TARGETING: Select top 3 candidates to increase availability
-        target_candidates = gpu_candidates[:3]
+        # MULTI-GPU TARGETING: Select top 5 candidates to maximise GPU availability
+        target_candidates = gpu_candidates[:5]
         target_ids = [c[0] for c in target_candidates]
         target_display = ", ".join([c[1] for c in target_candidates])
 

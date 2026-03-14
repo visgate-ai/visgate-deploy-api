@@ -158,7 +158,7 @@ class Settings(BaseSettings):
         description="Runpod GraphQL API URL",
     )
     runpod_default_locations: str = Field(
-        default="US",
+        default="EU,US",
         description="Default Runpod locations (comma-separated)",
     )
     runpod_workers_min: int = Field(
