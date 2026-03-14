@@ -488,8 +488,7 @@ async def orchestrate_deployment(
         last_error = None
 
         if provider_name == "vast":
-            # ── Vast.ai flow: direct instance creation (no template needed) ──
-            # Use VRAM from first candidate as the GPU search criterion
+            # ── Vast.ai Serverless flow: template → endpoint → workergroup ──
             first_gpu_id = target_ids[0]
             try:
                 endpoint_data = await provider.create_endpoint(
@@ -498,7 +497,8 @@ async def orchestrate_deployment(
                     image=worker_target["image"],
                     env=env,
                     api_key=provider_api_key,
-                    disk_gb=_container_disk_gb(worker_target["profile"]),
+                    cold_workers=0,
+                    max_workers=settings.runpod_workers_max,
                 )
             except Exception as e:
                 last_error = e
@@ -668,7 +668,10 @@ async def orchestrate_deployment(
                 return
 
             if provider_name == "vast":
-                ready, probe_error = await _probe_http_readiness(endpoint_url)
+                health = await provider.check_endpoint_health(endpoint_id, provider_api_key)
+                running_count = health.get("running_count", 0)
+                ready = running_count > 0
+                probe_error = health.get("error") if not ready else None
             elif _uses_health_probe_readiness(worker_target["profile"]):
                 ready, probe_error = await _probe_runpod_readiness(endpoint_url, user_runpod_key)
             else:

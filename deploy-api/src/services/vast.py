@@ -1,25 +1,27 @@
-"""Vast.ai Provider Implementation.
+"""Vast.ai Serverless Provider Implementation.
 
-Vast.ai is an instance-based GPU marketplace.  Unlike RunPod's built-in
-serverless queue, Vast.ai instances are raw Docker containers with exposed
-ports.  The inference worker must run in HTTP mode (WORKER_MODE=http) so
-that submit_job / get_job_status can communicate over plain HTTP.
+Vast.ai Serverless provides managed inference endpoints with auto-scaling
+worker groups — similar to RunPod's serverless product.
 
 Flow:
-  1. create_endpoint  → search GPU offers → rent cheapest instance → wait "running"
-  2. submit_job       → POST /run   to instance HTTP server → returns job ID
-  3. get_job_status   → GET /status/<id> from instance → returns status/output
-  4. delete_endpoint  → destroy instance
+  1. create_endpoint  → create Vast template → create serverless endpoint →
+                        create workergroup (links template + GPU requirements)
+  2. submit_job       → POST /route/ (run.vast.ai) to get a live worker URL →
+                        POST /run on that worker → return composite job ID
+  3. get_job_status   → parse worker URL from composite job ID →
+                        GET /status/<id> on that worker
+  4. delete_endpoint  → DELETE /api/v0/endptjobs/<id>/
+  5. health check     → POST /get_endpoint_workers/ (run.vast.ai)
 
-Auth: every request carries ``api_key`` as a query parameter.
+Auth: Bearer token in Authorization header.
+Management API: https://console.vast.ai
+Routing API:    https://run.vast.ai
 """
 
 from __future__ import annotations
 
 import asyncio
-import json as _json
 from typing import Any
-from urllib.parse import quote
 
 import httpx
 
@@ -34,23 +36,29 @@ from src.services.base_provider import (
 )
 from src.services.provider_factory import register_provider
 
-_API_BASE = "https://cloud.vast.ai/api/v0"
+_CONSOLE_BASE = "https://console.vast.ai"
+_ROUTE_BASE = "https://run.vast.ai"
 
 # Port the HTTP inference server listens on inside the container.
 _WORKER_HTTP_PORT = 8000
 
-# How long to wait for an instance to reach "running" state.
-_INSTANCE_READY_TIMEOUT = 600  # seconds
-_INSTANCE_POLL_INTERVAL = 10   # seconds
+# Separator used to encode worker URL inside the provider job ID so that
+# get_job_status can reach the exact worker that accepted the job.
+_JOB_ID_SEP = "||"
 
 
 class VastProvider(BaseInferenceProvider):
-    """Vast.ai inference provider backed by on-demand GPU instances."""
+    """Vast.ai inference provider using the Serverless API."""
 
-    def __init__(self, api_base: str = _API_BASE) -> None:
-        self.api_base = api_base.rstrip("/")
+    def __init__(
+        self,
+        console_base: str = _CONSOLE_BASE,
+        route_base: str = _ROUTE_BASE,
+    ) -> None:
+        self.console_base = console_base.rstrip("/")
+        self.route_base = route_base.rstrip("/")
 
-    # ── low-level HTTP helpers ───────────────────────────────────────────
+    # ── low-level HTTP helper ────────────────────────────────────────────
 
     async def _request(
         self,
@@ -58,15 +66,18 @@ class VastProvider(BaseInferenceProvider):
         path: str,
         api_key: str,
         *,
+        base: str | None = None,
         json_payload: dict[str, Any] | None = None,
-        params: dict[str, str] | None = None,
         timeout: float = 30.0,
         _max_retries: int = 3,
     ) -> Any:
-        url = f"{self.api_base}{path}"
-        query = {"api_key": api_key}
-        if params:
-            query.update(params)
+        url = f"{base or self.console_base}{path}"
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Accept": "application/json",
+        }
+        if json_payload is not None:
+            headers["Content-Type"] = "application/json"
 
         last_exc: Exception | None = None
         for attempt in range(_max_retries):
@@ -76,8 +87,7 @@ class VastProvider(BaseInferenceProvider):
                         method,
                         url,
                         json=json_payload,
-                        params=query,
-                        headers={"Accept": "application/json"},
+                        headers=headers,
                     )
 
                 if resp.status_code == 429 or resp.status_code >= 500:
@@ -97,7 +107,6 @@ class VastProvider(BaseInferenceProvider):
                         details={"status": resp.status_code},
                     )
 
-                # Vast sometimes returns empty body on success (e.g. DELETE)
                 text = resp.text.strip()
                 if not text:
                     return {}
@@ -112,128 +121,134 @@ class VastProvider(BaseInferenceProvider):
 
         raise last_exc or VastAPIError(message="Vast.ai request failed after retries")
 
-    # ── offer search ─────────────────────────────────────────────────────
+    # ── Serverless management helpers ────────────────────────────────────
 
-    async def search_offers(
+    async def create_template(
         self,
         api_key: str,
         *,
-        min_gpu_ram_gb: int = 0,
-        gpu_name: str | None = None,
-        limit: int = 20,
-    ) -> list[dict[str, Any]]:
-        """Search available on-demand GPU offers on Vast.ai.
-
-        Returns a list of offers sorted by price (cheapest first).
-        """
-        query: dict[str, Any] = {
-            "verified": {"eq": True},
-            "rentable": {"eq": True},
-            "rented": {"eq": False},
-        }
-        if min_gpu_ram_gb > 0:
-            query["gpu_ram"] = {"gte": min_gpu_ram_gb * 1024}  # Vast uses MB
-        if gpu_name:
-            query["gpu_name"] = {"eq": gpu_name}
-
-        q_json = _json.dumps(query)
-        params = {
-            "q": q_json,
-            "order": "[[\"dph_total\",\"asc\"]]",
-            "type": "on-demand",
-            "limit": str(limit),
-        }
-        data = await self._request("GET", "/bundles/", api_key, params=params)
-        offers = data if isinstance(data, list) else data.get("offers", [])
-        return offers
-
-    # ── instance lifecycle ───────────────────────────────────────────────
-
-    async def _create_instance(
-        self,
-        api_key: str,
-        offer_id: int,
+        name: str,
         image: str,
-        env: dict[str, str],
-        disk_gb: float = 50.0,
-        label: str = "",
+        env_str: str = "",
+        runtype: str = "args",
     ) -> dict[str, Any]:
-        """Rent a machine from an offer and spin up a Docker container."""
+        """POST /api/v0/template/ → {success, template: {id, hash_id, name}}"""
         body: dict[str, Any] = {
-            "client_id": "me",
+            "name": name,
             "image": image,
-            "env": env,
-            "disk": disk_gb,
-            "runtype": "args",
+            "runtype": runtype,
         }
-        if label:
-            body["label"] = label
-        # PUT /asks/{offer_id}/ creates the instance
-        return await self._request("PUT", f"/asks/{offer_id}/", api_key, json_payload=body)
+        if env_str:
+            body["env"] = env_str
+        return await self._request("POST", "/api/v0/template/", api_key, json_payload=body)
 
-    async def _get_instance(self, api_key: str, instance_id: int | str) -> dict[str, Any]:
-        return await self._request("GET", f"/instances/{instance_id}/", api_key)
-
-    async def _list_instances(self, api_key: str) -> list[dict[str, Any]]:
-        data = await self._request("GET", "/instances/", api_key)
-        if isinstance(data, list):
-            return data
-        return data.get("instances", [])
-
-    async def _destroy_instance(self, api_key: str, instance_id: int | str) -> None:
-        await self._request("DELETE", f"/instances/{instance_id}/", api_key)
-
-    def _instance_endpoint_url(self, instance: dict[str, Any]) -> str | None:
-        """Extract HTTP endpoint URL from a running Vast.ai instance."""
-        public_ip = instance.get("public_ipaddr")
-        if not public_ip:
-            return None
-
-        # Vast.ai provides direct port mapping: the instance exposes ports
-        # accessible via public_ip:ssh_port offset or direct_port_start.
-        # For HTTP server on port 8000, Vast.ai maps it to a host port.
-        ports = instance.get("ports", {})
-        port_key = f"{_WORKER_HTTP_PORT}/tcp"
-        if port_key in ports:
-            mappings = ports[port_key]
-            if isinstance(mappings, list) and mappings:
-                host_port = mappings[0].get("HostPort")
-                if host_port:
-                    return f"http://{public_ip}:{host_port}"
-
-        # Fallback: Vast.ai often uses direct_port_start + offset
-        direct_port_start = instance.get("direct_port_start")
-        if direct_port_start:
-            # Direct port mapping: container port 8000 → host direct_port_start + (8000 - first_exposed_port)
-            # By default, if only 8000 is exposed, the mapping is direct_port_start itself
-            return f"http://{public_ip}:{direct_port_start}"
-
-        return None
-
-    async def _wait_for_running(
+    async def create_serverless_endpoint(
         self,
         api_key: str,
-        instance_id: int | str,
-        timeout: float = _INSTANCE_READY_TIMEOUT,
+        *,
+        endpoint_name: str,
+        cold_workers: int = 0,
+        max_workers: int = 1,
+        min_load: int = 0,
+        target_util: int = 80,
     ) -> dict[str, Any]:
-        """Poll instance until it reaches 'running' status or timeout."""
-        deadline = asyncio.get_event_loop().time() + timeout
-        while True:
-            instance = await self._get_instance(api_key, instance_id)
-            status = instance.get("actual_status", "")
-            if status == "running":
-                return instance
-            if status in ("exited", "error", "destroyed"):
-                raise VastAPIError(
-                    f"Instance {instance_id} entered terminal state: {status}",
-                    details={"instance_id": instance_id, "status": status},
-                )
-            if asyncio.get_event_loop().time() > deadline:
-                raise VastAPIError(
-                    f"Instance {instance_id} did not start within {timeout}s (status: {status})",
-                    details={"instance_id": instance_id, "status": status},
-                )
-            await asyncio.sleep(_INSTANCE_POLL_INTERVAL)
+        """POST /api/v0/endptjobs/ → {success, result: endpoint_id}"""
+        body = {
+            "endpoint_name": endpoint_name,
+            "cold_workers": cold_workers,
+            "max_workers": max_workers,
+            "min_load": min_load,
+            "target_util": target_util,
+        }
+        return await self._request("POST", "/api/v0/endptjobs/", api_key, json_payload=body)
+
+    async def create_workergroup(
+        self,
+        api_key: str,
+        *,
+        endpoint_name: str,
+        template_hash: str,
+        gpu_ram: int = 0,
+        cold_workers: int = 0,
+        max_workers: int = 1,
+        search_params: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """POST /api/v0/workergroups/ → {success, id}"""
+        body: dict[str, Any] = {
+            "endpoint_name": endpoint_name,
+            "template_hash": template_hash,
+            "cold_workers": cold_workers,
+            "max_workers": max_workers,
+        }
+        if gpu_ram > 0:
+            body["gpu_ram"] = gpu_ram
+        if search_params:
+            body["search_params"] = search_params
+        return await self._request("POST", "/api/v0/workergroups/", api_key, json_payload=body)
+
+    async def route_request(
+        self,
+        api_key: str,
+        endpoint_name: str,
+        cost: int = 100,
+    ) -> dict[str, Any]:
+        """POST /route/ on run.vast.ai → {url, reqnum, signature} or {status: "Stopped"}"""
+        body = {"endpoint": endpoint_name, "cost": cost}
+        return await self._request(
+            "POST", "/route/", api_key,
+            base=self.route_base,
+            json_payload=body,
+        )
+
+    async def get_endpoint_workers(
+        self,
+        api_key: str,
+        endpoint_id: int | str,
+    ) -> dict[str, Any]:
+        """POST /get_endpoint_workers/ on run.vast.ai → {workers: [...]}"""
+        body = {"id": int(endpoint_id)}
+        return await self._request(
+            "POST", "/get_endpoint_workers/", api_key,
+            base=self.route_base,
+            json_payload=body,
+        )
+
+    # ── URL helpers ──────────────────────────────────────────────────────
+
+    @staticmethod
+    def build_endpoint_url(endpoint_name: str) -> str:
+        """Encode endpoint name as a virtual URL for storage."""
+        return f"vast-ep://{endpoint_name}"
+
+    @staticmethod
+    def parse_endpoint_name(endpoint_url: str) -> str:
+        """Extract endpoint name from the virtual URL."""
+        prefix = "vast-ep://"
+        if endpoint_url.startswith(prefix):
+            return endpoint_url[len(prefix):]
+        return endpoint_url
+
+    @staticmethod
+    def encode_job_id(worker_url: str, actual_job_id: str) -> str:
+        return f"{worker_url}{_JOB_ID_SEP}{actual_job_id}"
+
+    @staticmethod
+    def decode_job_id(composite_id: str) -> tuple[str, str]:
+        """Return (worker_url, actual_job_id)."""
+        if _JOB_ID_SEP in composite_id:
+            worker_url, actual = composite_id.split(_JOB_ID_SEP, 1)
+            return worker_url, actual
+        return "", composite_id
+
+    @staticmethod
+    def _env_dict_to_flag_str(env: dict[str, str]) -> str:
+        """Convert env dict to Docker-flag format for Vast template API.
+
+        Example: ``{A: 1, B: 2}`` → ``-e A=1 -e B=2 -p 8000:8000``
+        """
+        parts = [f"-e {k}={v}" for k, v in env.items()]
+        parts.append(f"-p {_WORKER_HTTP_PORT}:{_WORKER_HTTP_PORT}")
+        return " ".join(parts)
 
     # ── BaseInferenceProvider implementation ─────────────────────────────
 
@@ -246,103 +261,114 @@ class VastProvider(BaseInferenceProvider):
         api_key: str,
         **kwargs: Any,
     ) -> ProviderEndpoint:
-        """Search for a GPU offer and create an instance.
+        """Create a Vast.ai serverless endpoint with template and workergroup.
 
-        ``gpu_id`` is interpreted as a minimum VRAM requirement in GB (string).
-        If it's a numeric string → search by VRAM; otherwise treat as GPU name.
+        ``gpu_id`` is interpreted as VRAM in GB (numeric string) or GPU name.
         """
         min_gpu_ram_gb = 0
-        gpu_name: str | None = None
         try:
             min_gpu_ram_gb = int(gpu_id)
         except (ValueError, TypeError):
-            gpu_name = gpu_id
+            pass
 
-        # Inject HTTP mode so the worker starts its HTTP server instead of runpod.serverless
+        # Inject HTTP mode so the worker starts its HTTP server
         env = {**env, "WORKER_MODE": "http", "HTTP_PORT": str(_WORKER_HTTP_PORT)}
+        env_str = self._env_dict_to_flag_str(env)
 
-        disk_gb = kwargs.get("disk_gb", 50.0)
+        cold_workers = kwargs.get("cold_workers", 0)
+        max_workers = kwargs.get("max_workers", 1)
+        endpoint_name = name
 
         structured_log(
             "INFO",
-            "Vast.ai searching for GPU offers",
-            metadata={"min_gpu_ram_gb": min_gpu_ram_gb, "gpu_name": gpu_name, "image": image},
-        )
-        offers = await self.search_offers(
-            api_key,
-            min_gpu_ram_gb=min_gpu_ram_gb,
-            gpu_name=gpu_name,
-        )
-        if not offers:
-            raise VastAPIError(
-                f"No Vast.ai offers found for GPU requirement: {gpu_id}",
-                details={"gpu_id": gpu_id},
-            )
-
-        # Pick the cheapest suitable offer
-        offer = offers[0]
-        offer_id = offer["id"]
-        structured_log(
-            "INFO",
-            "Vast.ai selected offer",
+            "Vast.ai creating serverless endpoint",
             metadata={
-                "offer_id": offer_id,
-                "gpu_name": offer.get("gpu_name"),
-                "gpu_ram": offer.get("gpu_ram"),
-                "dph_total": offer.get("dph_total"),
+                "endpoint_name": endpoint_name,
+                "image": image,
+                "gpu_ram_gb": min_gpu_ram_gb,
             },
         )
 
-        result = await self._create_instance(
+        # 1. Create template
+        template_resp = await self.create_template(
             api_key,
-            offer_id,
-            image,
-            env,
-            disk_gb=disk_gb,
-            label=name,
+            name=f"visgate-{endpoint_name}",
+            image=image,
+            env_str=env_str,
         )
-
-        instance_id = result.get("new_contract") or result.get("instance_id") or result.get("id")
-        if not instance_id:
-            raise VastAPIError("create_instance returned no instance ID", details={"response": result})
-
-        structured_log("INFO", "Vast.ai instance created, waiting for running state", metadata={"instance_id": instance_id})
-        instance = await self._wait_for_running(api_key, instance_id)
-        endpoint_url = self._instance_endpoint_url(instance)
-        if not endpoint_url:
+        template = template_resp.get("template", {})
+        template_hash = template.get("hash_id", "")
+        template_id = template.get("id")
+        if not template_hash:
             raise VastAPIError(
-                f"Could not determine endpoint URL for instance {instance_id}",
-                details={"instance": instance},
+                "Template creation returned no hash_id",
+                details={"response": template_resp},
             )
+        structured_log("INFO", "Vast.ai template created", metadata={"template_id": template_id, "hash": template_hash})
 
-        structured_log("INFO", "Vast.ai instance running", metadata={"instance_id": instance_id, "endpoint_url": endpoint_url})
+        # 2. Create serverless endpoint
+        ep_resp = await self.create_serverless_endpoint(
+            api_key,
+            endpoint_name=endpoint_name,
+            cold_workers=cold_workers,
+            max_workers=max_workers,
+        )
+        ep_id = ep_resp.get("result")
+        if not ep_id:
+            raise VastAPIError(
+                "Endpoint creation returned no ID",
+                details={"response": ep_resp},
+            )
+        structured_log("INFO", "Vast.ai serverless endpoint created", metadata={"endpoint_id": ep_id})
+
+        # 3. Create workergroup connecting template → endpoint
+        wg_resp = await self.create_workergroup(
+            api_key,
+            endpoint_name=endpoint_name,
+            template_hash=template_hash,
+            gpu_ram=min_gpu_ram_gb * 1024 if min_gpu_ram_gb else 0,
+            cold_workers=cold_workers,
+            max_workers=max_workers,
+        )
+        wg_id = wg_resp.get("id")
+        structured_log("INFO", "Vast.ai workergroup created", metadata={"workergroup_id": wg_id})
+
         return {
-            "id": str(instance_id),
-            "url": endpoint_url,
-            "raw_response": instance,
+            "id": str(ep_id),
+            "url": self.build_endpoint_url(endpoint_name),
+            "raw_response": {
+                "endpoint_id": ep_id,
+                "endpoint_name": endpoint_name,
+                "template_id": template_id,
+                "template_hash": template_hash,
+                "workergroup_id": wg_id,
+            },
         }
 
     async def delete_endpoint(self, endpoint_id: str, api_key: str) -> None:
-        await self._destroy_instance(api_key, endpoint_id)
+        """DELETE /api/v0/endptjobs/<id>/ — also deletes associated workergroups."""
+        await self._request("DELETE", f"/api/v0/endptjobs/{endpoint_id}/", api_key)
 
     async def list_endpoints(self, api_key: str) -> list[ProviderEndpointSummary]:
-        instances = await self._list_instances(api_key)
+        resp = await self._request("GET", "/api/v0/endptjobs/", api_key)
+        results = resp.get("results", []) if isinstance(resp, dict) else []
         summaries: list[ProviderEndpointSummary] = []
-        for inst in instances:
-            inst_id = str(inst.get("id", ""))
-            status = inst.get("actual_status", "unknown")
-            url = self._instance_endpoint_url(inst)
+        for ep in results:
+            ep_id = str(ep.get("id", ""))
+            ep_name = ep.get("endpoint_name", "")
             summaries.append({
-                "id": inst_id,
-                "name": inst.get("label", "") or f"vast-{inst_id}",
-                "status": status,
-                "url": url,
-                "raw_response": inst,
+                "id": ep_id,
+                "name": ep_name or f"vast-{ep_id}",
+                "status": ep.get("endpoint_state", "unknown"),
+                "url": self.build_endpoint_url(ep_name) if ep_name else None,
+                "raw_response": ep,
             })
         return summaries
 
     async def list_gpu_types(self, api_key: str) -> list[dict[str, Any]]:
-        offers = await self.search_offers(api_key, limit=100)
+        """List available GPUs by querying the offers marketplace."""
+        data = await self._request("GET", "/api/v0/bundles/", api_key)
+        offers = data if isinstance(data, list) else data.get("offers", [])
         seen: dict[str, dict[str, Any]] = {}
         for o in offers:
             gpu = o.get("gpu_name", "unknown")
@@ -356,9 +382,7 @@ class VastProvider(BaseInferenceProvider):
         return list(seen.values())
 
     def get_run_url(self, endpoint_id: str) -> str:
-        # For Vast.ai the actual URL is determined per-instance and stored
-        # in the deployment doc.  This method returns a placeholder.
-        return f"vast://{endpoint_id}/run"
+        return f"{self.route_base}/route/"
 
     async def submit_job(
         self,
@@ -370,13 +394,33 @@ class VastProvider(BaseInferenceProvider):
         policy: dict[str, Any] | None = None,
         s3_config: dict[str, Any] | None = None,
     ) -> ProviderJobAccepted:
-        """Submit an async inference job to the instance's HTTP server."""
+        """Route to a live worker then POST /run on it.
+
+        The worker URL is encoded in the returned job ID so that
+        ``get_job_status`` can reach the correct worker later.
+        """
+        endpoint_name = self.parse_endpoint_name(endpoint_url)
+
+        # Ask Vast router for a live worker
+        route_resp = await self.route_request(api_key, endpoint_name)
+        if isinstance(route_resp, dict) and route_resp.get("status") == "Stopped":
+            raise VastAPIError(
+                "No workers available (endpoint stopped)",
+                details={"endpoint": endpoint_name},
+            )
+        worker_url = route_resp.get("url") if isinstance(route_resp, dict) else None
+        if not worker_url:
+            raise VastAPIError(
+                "Route returned no worker URL",
+                details={"endpoint": endpoint_name, "response": route_resp},
+            )
+
+        # Build job payload
         payload: dict[str, Any] = {"input": dict(job_input)}
         if s3_config:
             payload["input"]["s3Config"] = s3_config
 
-        # endpoint_url is like http://1.2.3.4:54321
-        run_url = endpoint_url.rstrip("/") + "/run"
+        run_url = f"{worker_url.rstrip('/')}/run"
         async with httpx.AsyncClient(timeout=600.0) as client:
             resp = await client.post(
                 run_url,
@@ -389,14 +433,23 @@ class VastProvider(BaseInferenceProvider):
                 status_code=resp.status_code,
             )
         data = resp.json()
+        actual_job_id = data.get("id", "")
+
         return {
-            "id": data.get("id", ""),
+            "id": self.encode_job_id(worker_url, actual_job_id),
             "status": data.get("status", "IN_QUEUE"),
             "raw_response": data,
         }
 
     async def get_job_status(self, endpoint_url: str, job_id: str, api_key: str) -> ProviderJobStatus:
-        status_url = endpoint_url.rstrip("/") + f"/status/{job_id}"
+        worker_url, actual_job_id = self.decode_job_id(job_id)
+        if not worker_url:
+            raise VastAPIError(
+                "Cannot determine worker URL from job ID",
+                details={"job_id": job_id},
+            )
+
+        status_url = f"{worker_url.rstrip('/')}/status/{actual_job_id}"
         async with httpx.AsyncClient(timeout=30.0) as client:
             resp = await client.get(status_url)
         if resp.status_code >= 400:
@@ -406,7 +459,7 @@ class VastProvider(BaseInferenceProvider):
             )
         data = resp.json()
         return {
-            "id": data.get("id", job_id),
+            "id": job_id,
             "status": data.get("status", "UNKNOWN"),
             "output": data.get("output"),
             "error": data.get("error"),
@@ -417,31 +470,50 @@ class VastProvider(BaseInferenceProvider):
         }
 
     async def cancel_job(self, endpoint_url: str, job_id: str, api_key: str) -> ProviderJobStatus:
-        # Vast.ai HTTP mode doesn't support cancel; return current status
         return await self.get_job_status(endpoint_url, job_id, api_key)
 
     async def retry_job(self, endpoint_url: str, job_id: str, api_key: str) -> ProviderJobStatus:
-        # Vast.ai HTTP mode doesn't support retry natively; return current status
         return await self.get_job_status(endpoint_url, job_id, api_key)
 
     async def get_endpoint_health(self, endpoint_url: str, api_key: str) -> dict[str, Any]:
-        """Probe the instance HTTP server's /health endpoint."""
-        try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                resp = await client.get(f"{endpoint_url.rstrip('/')}/health")
-            if resp.status_code >= 400:
-                return {"status": "error", "http_status": resp.status_code}
-            return resp.json()
-        except Exception as exc:
-            return {"status": "unreachable", "error": str(exc)}
+        """Check endpoint health via the worker-status API on run.vast.ai.
+
+        ``endpoint_url`` is the stored virtual URL (``vast-ep://<name>``).
+        We parse the endpoint name and look up workers through the router.
+        """
+        # If this is a direct HTTP URL (e.g. from a worker), probe /health
+        if endpoint_url.startswith(("http://", "https://")):
+            try:
+                async with httpx.AsyncClient(timeout=10.0) as client:
+                    resp = await client.get(f"{endpoint_url.rstrip('/')}/health")
+                if resp.status_code >= 400:
+                    return {"status": "error", "http_status": resp.status_code}
+                return resp.json()
+            except Exception as exc:
+                return {"status": "unreachable", "error": str(exc)}
+
+        # For virtual endpoint URL, we cannot probe directly — caller should
+        # use check_endpoint_health(endpoint_id, ...) instead.
+        return {"status": "unknown", "note": "use check_endpoint_health with endpoint_id"}
 
     async def check_endpoint_health(self, endpoint_id: str, api_key: str) -> dict[str, Any]:
-        """Check health by looking up the instance and probing its HTTP server."""
-        instance = await self._get_instance(api_key, endpoint_id)
-        url = self._instance_endpoint_url(instance)
-        if not url:
-            return {"status": "no_url", "actual_status": instance.get("actual_status")}
-        return await self.get_endpoint_health(url, api_key)
+        """Query Vast.ai for the live workers of a serverless endpoint."""
+        try:
+            data = await self.get_endpoint_workers(api_key, endpoint_id)
+        except VastAPIError as exc:
+            return {"status": "error", "error": str(exc), "workers": []}
+
+        if isinstance(data, str):
+            return {"status": "error", "error": data, "workers": []}
+
+        workers = data.get("workers", [])
+        running = [w for w in workers if w.get("status") == "running"]
+        return {
+            "status": "ready" if running else ("loading" if workers else "no_workers"),
+            "workers": workers,
+            "running_count": len(running),
+            "total_count": len(workers),
+        }
 
 
 # Register the provider

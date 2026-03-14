@@ -235,8 +235,12 @@ class Settings(BaseSettings):
         description="Vast.ai API key for GPU instance rental.",
     )
     vast_api_base: str = Field(
-        default="https://cloud.vast.ai/api/v0",
-        description="Vast.ai REST API base URL",
+        default="https://console.vast.ai",
+        description="Vast.ai management API base URL (console)",
+    )
+    vast_route_base: str = Field(
+        default="https://run.vast.ai",
+        description="Vast.ai routing API base URL (run)",
     )
 
     # Webhook

@@ -1,4 +1,4 @@
-"""Unit tests for Vast.ai provider (src/services/vast.py)."""
+"""Unit tests for Vast.ai Serverless provider (src/services/vast.py)."""
 
 from __future__ import annotations
 
@@ -10,12 +10,15 @@ import httpx
 import pytest
 
 from src.core.errors import VastAPIError
-from src.services.vast import VastProvider
+from src.services.vast import VastProvider, _JOB_ID_SEP
 
 
 @pytest.fixture
 def provider() -> VastProvider:
-    return VastProvider(api_base="https://cloud.vast.ai/api/v0")
+    return VastProvider(
+        console_base="https://console.vast.ai",
+        route_base="https://run.vast.ai",
+    )
 
 
 def _mock_response(status_code: int = 200, json_data: Any = None, text: str = "") -> httpx.Response:
@@ -34,248 +37,60 @@ def _mock_response(status_code: int = 200, json_data: Any = None, text: str = ""
     )
 
 
-# ── search_offers ────────────────────────────────────────────────────────────
+# ── URL/ID helpers ───────────────────────────────────────────────────────────
+
+def test_build_and_parse_endpoint_url() -> None:
+    url = VastProvider.build_endpoint_url("my-endpoint")
+    assert url == "vast-ep://my-endpoint"
+    assert VastProvider.parse_endpoint_name(url) == "my-endpoint"
+
+
+def test_parse_endpoint_name_plain() -> None:
+    assert VastProvider.parse_endpoint_name("some-name") == "some-name"
+
+
+def test_encode_decode_job_id() -> None:
+    composite = VastProvider.encode_job_id("http://1.2.3.4:8000", "abc-123")
+    assert _JOB_ID_SEP in composite
+    worker_url, actual_id = VastProvider.decode_job_id(composite)
+    assert worker_url == "http://1.2.3.4:8000"
+    assert actual_id == "abc-123"
+
+
+def test_decode_job_id_no_separator() -> None:
+    worker_url, actual_id = VastProvider.decode_job_id("plain-id")
+    assert worker_url == ""
+    assert actual_id == "plain-id"
+
+
+def test_env_dict_to_flag_str() -> None:
+    env = {"A": "1", "B": "2"}
+    result = VastProvider._env_dict_to_flag_str(env)
+    assert "-e A=1" in result
+    assert "-e B=2" in result
+    assert "-p 8000:8000" in result
+
+
+# ── _request ─────────────────────────────────────────────────────────────────
 
 @pytest.mark.asyncio
-async def test_search_offers_success(provider: VastProvider) -> None:
-    offers = [
-        {"id": 1, "gpu_name": "RTX 4090", "gpu_ram": 24576, "dph_total": 0.45},
-        {"id": 2, "gpu_name": "RTX 3090", "gpu_ram": 24576, "dph_total": 0.35},
-    ]
+async def test_request_uses_bearer_auth(provider: VastProvider) -> None:
+    """Verify requests use Authorization: Bearer header (not query param)."""
+    captured_request = None
 
     async def mock_send(self, request, **kwargs):
-        return _mock_response(200, {"offers": offers})
+        nonlocal captured_request
+        captured_request = request
+        return _mock_response(200, {"ok": True})
 
     with patch.object(httpx.AsyncClient, "send", mock_send):
-        result = await provider.search_offers("test-key", min_gpu_ram_gb=24)
+        await provider._request("GET", "/api/v0/test/", "my-secret-key")
 
-    assert len(result) == 2
-    assert result[0]["gpu_name"] == "RTX 4090"
+    assert captured_request is not None
+    assert captured_request.headers.get("authorization") == "Bearer my-secret-key"
+    # No api_key in query params
+    assert "api_key" not in str(captured_request.url)
 
-
-@pytest.mark.asyncio
-async def test_search_offers_empty(provider: VastProvider) -> None:
-    async def mock_send(self, request, **kwargs):
-        return _mock_response(200, {"offers": []})
-
-    with patch.object(httpx.AsyncClient, "send", mock_send):
-        result = await provider.search_offers("test-key", min_gpu_ram_gb=80)
-
-    assert result == []
-
-
-@pytest.mark.asyncio
-async def test_search_offers_api_error(provider: VastProvider) -> None:
-    async def mock_send(self, request, **kwargs):
-        return _mock_response(403, text="Forbidden")
-
-    with patch.object(httpx.AsyncClient, "send", mock_send):
-        with pytest.raises(VastAPIError, match="403"):
-            await provider.search_offers("bad-key")
-
-
-# ── create_endpoint ──────────────────────────────────────────────────────────
-
-@pytest.mark.asyncio
-async def test_create_endpoint_success(provider: VastProvider) -> None:
-    offers = [{"id": 42, "gpu_name": "RTX 4090", "gpu_ram": 24576, "dph_total": 0.45}]
-    create_resp = {"success": True, "new_contract": 999}
-    running_instance = {
-        "id": 999,
-        "actual_status": "running",
-        "public_ipaddr": "1.2.3.4",
-        "ports": {"8000/tcp": [{"HostIp": "0.0.0.0", "HostPort": "54321"}]},
-    }
-
-    call_count = 0
-
-    async def mock_send(self, request, **kwargs):
-        nonlocal call_count
-        call_count += 1
-        url = str(request.url)
-        if "/bundles/" in url:
-            return _mock_response(200, {"offers": offers})
-        if "/asks/" in url:
-            return _mock_response(200, create_resp)
-        if "/instances/999/" in url:
-            return _mock_response(200, running_instance)
-        return _mock_response(404, text="not found")
-
-    with patch.object(httpx.AsyncClient, "send", mock_send):
-        ep = await provider.create_endpoint(
-            name="test-ep",
-            gpu_id="24",
-            image="visgateai/inference-image:latest",
-            env={"HF_MODEL_ID": "stabilityai/sd-turbo"},
-            api_key="test-key",
-        )
-
-    assert ep["id"] == "999"
-    assert ep["url"] == "http://1.2.3.4:54321"
-
-
-@pytest.mark.asyncio
-async def test_create_endpoint_no_offers(provider: VastProvider) -> None:
-    async def mock_send(self, request, **kwargs):
-        return _mock_response(200, {"offers": []})
-
-    with patch.object(httpx.AsyncClient, "send", mock_send):
-        with pytest.raises(VastAPIError, match="No Vast.ai offers found"):
-            await provider.create_endpoint(
-                name="test-ep",
-                gpu_id="24",
-                image="visgateai/inference-image:latest",
-                env={},
-                api_key="test-key",
-            )
-
-
-# ── delete_endpoint ──────────────────────────────────────────────────────────
-
-@pytest.mark.asyncio
-async def test_delete_endpoint(provider: VastProvider) -> None:
-    async def mock_send(self, request, **kwargs):
-        return _mock_response(200, {})
-
-    with patch.object(httpx.AsyncClient, "send", mock_send):
-        await provider.delete_endpoint("999", "test-key")
-
-
-# ── list_endpoints ───────────────────────────────────────────────────────────
-
-@pytest.mark.asyncio
-async def test_list_endpoints(provider: VastProvider) -> None:
-    instances = [
-        {"id": 100, "actual_status": "running", "label": "ep-1", "public_ipaddr": "1.1.1.1", "ports": {}},
-        {"id": 101, "actual_status": "loading", "label": "ep-2", "public_ipaddr": None, "ports": {}},
-    ]
-
-    async def mock_send(self, request, **kwargs):
-        return _mock_response(200, {"instances": instances})
-
-    with patch.object(httpx.AsyncClient, "send", mock_send):
-        summaries = await provider.list_endpoints("test-key")
-
-    assert len(summaries) == 2
-    assert summaries[0]["id"] == "100"
-    assert summaries[0]["name"] == "ep-1"
-    assert summaries[0]["status"] == "running"
-
-
-# ── list_gpu_types ───────────────────────────────────────────────────────────
-
-@pytest.mark.asyncio
-async def test_list_gpu_types(provider: VastProvider) -> None:
-    offers = [
-        {"id": 1, "gpu_name": "RTX 4090", "gpu_ram": 24576, "dph_total": 0.45},
-        {"id": 2, "gpu_name": "RTX 4090", "gpu_ram": 24576, "dph_total": 0.50},
-        {"id": 3, "gpu_name": "A100", "gpu_ram": 81920, "dph_total": 1.20},
-    ]
-
-    async def mock_send(self, request, **kwargs):
-        return _mock_response(200, {"offers": offers})
-
-    with patch.object(httpx.AsyncClient, "send", mock_send):
-        gpus = await provider.list_gpu_types("test-key")
-
-    assert len(gpus) == 2  # deduplicated
-    names = {g["displayName"] for g in gpus}
-    assert "RTX 4090" in names
-    assert "A100" in names
-
-
-# ── submit_job ───────────────────────────────────────────────────────────────
-
-@pytest.mark.asyncio
-async def test_submit_job_success(provider: VastProvider) -> None:
-    job_resp = {"id": "abc-123", "status": "IN_QUEUE"}
-
-    async def mock_send(self, request, **kwargs):
-        return _mock_response(200, job_resp)
-
-    with patch.object(httpx.AsyncClient, "send", mock_send):
-        accepted = await provider.submit_job(
-            "http://1.2.3.4:54321",
-            "api-key",
-            {"prompt": "a cat"},
-        )
-
-    assert accepted["id"] == "abc-123"
-    assert accepted["status"] == "IN_QUEUE"
-
-
-@pytest.mark.asyncio
-async def test_submit_job_error(provider: VastProvider) -> None:
-    async def mock_send(self, request, **kwargs):
-        return _mock_response(500, text="Internal Server Error")
-
-    with patch.object(httpx.AsyncClient, "send", mock_send):
-        with pytest.raises(VastAPIError, match="500"):
-            await provider.submit_job("http://1.2.3.4:54321", "api-key", {})
-
-
-# ── get_job_status ───────────────────────────────────────────────────────────
-
-@pytest.mark.asyncio
-async def test_get_job_status_completed(provider: VastProvider) -> None:
-    status_resp = {"id": "abc-123", "status": "COMPLETED", "output": {"url": "http://example.com/out.png"}}
-
-    async def mock_send(self, request, **kwargs):
-        return _mock_response(200, status_resp)
-
-    with patch.object(httpx.AsyncClient, "send", mock_send):
-        status = await provider.get_job_status("http://1.2.3.4:54321", "abc-123", "api-key")
-
-    assert status["status"] == "COMPLETED"
-    assert status["output"]["url"] == "http://example.com/out.png"
-
-
-@pytest.mark.asyncio
-async def test_get_job_status_not_found(provider: VastProvider) -> None:
-    async def mock_send(self, request, **kwargs):
-        return _mock_response(404, {"id": "bad", "status": "NOT_FOUND", "error": "Job not found"})
-
-    with patch.object(httpx.AsyncClient, "send", mock_send):
-        with pytest.raises(VastAPIError, match="404"):
-            await provider.get_job_status("http://1.2.3.4:54321", "bad", "api-key")
-
-
-# ── get_run_url ──────────────────────────────────────────────────────────────
-
-def test_get_run_url(provider: VastProvider) -> None:
-    assert provider.get_run_url("12345") == "vast://12345/run"
-
-
-# ── _instance_endpoint_url ───────────────────────────────────────────────────
-
-def test_instance_endpoint_url_with_ports(provider: VastProvider) -> None:
-    inst = {
-        "public_ipaddr": "10.0.0.1",
-        "ports": {"8000/tcp": [{"HostIp": "0.0.0.0", "HostPort": "9999"}]},
-    }
-    assert provider._instance_endpoint_url(inst) == "http://10.0.0.1:9999"
-
-
-def test_instance_endpoint_url_direct_port(provider: VastProvider) -> None:
-    inst = {"public_ipaddr": "10.0.0.1", "ports": {}, "direct_port_start": 40000}
-    assert provider._instance_endpoint_url(inst) == "http://10.0.0.1:40000"
-
-
-def test_instance_endpoint_url_missing(provider: VastProvider) -> None:
-    inst = {"ports": {}}
-    assert provider._instance_endpoint_url(inst) is None
-
-
-# ── provider_factory registration ────────────────────────────────────────────
-
-def test_vast_registered_in_factory() -> None:
-    from src.services.provider_factory import get_provider
-
-    p = get_provider("vast")
-    assert isinstance(p, VastProvider)
-
-
-# ── retry on transient errors ────────────────────────────────────────────────
 
 @pytest.mark.asyncio
 async def test_request_retries_on_500(provider: VastProvider) -> None:
@@ -293,3 +108,397 @@ async def test_request_retries_on_500(provider: VastProvider) -> None:
 
     assert result == {"ok": True}
     assert call_count == 3
+
+
+@pytest.mark.asyncio
+async def test_request_raises_on_4xx(provider: VastProvider) -> None:
+    async def mock_send(self, request, **kwargs):
+        return _mock_response(403, text="Forbidden")
+
+    with patch.object(httpx.AsyncClient, "send", mock_send):
+        with pytest.raises(VastAPIError, match="403"):
+            await provider._request("GET", "/api/v0/test/", "bad-key")
+
+
+# ── create_template ──────────────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_create_template(provider: VastProvider) -> None:
+    resp = {"success": True, "template": {"id": 100, "hash_id": "abc123", "name": "test"}}
+
+    async def mock_send(self, request, **kwargs):
+        assert "/api/v0/template/" in str(request.url)
+        body = json.loads(request.content)
+        assert body["name"] == "visgate-test"
+        assert body["image"] == "visgateai/inference-image:latest"
+        return _mock_response(200, resp)
+
+    with patch.object(httpx.AsyncClient, "send", mock_send):
+        result = await provider.create_template(
+            "key", name="visgate-test", image="visgateai/inference-image:latest", env_str="-e A=1"
+        )
+
+    assert result["template"]["hash_id"] == "abc123"
+
+
+# ── create_serverless_endpoint ───────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_create_serverless_endpoint(provider: VastProvider) -> None:
+    resp = {"success": True, "result": 42}
+
+    async def mock_send(self, request, **kwargs):
+        assert "/api/v0/endptjobs/" in str(request.url)
+        body = json.loads(request.content)
+        assert body["endpoint_name"] == "my-ep"
+        assert body["max_workers"] == 2
+        return _mock_response(200, resp)
+
+    with patch.object(httpx.AsyncClient, "send", mock_send):
+        result = await provider.create_serverless_endpoint(
+            "key", endpoint_name="my-ep", max_workers=2,
+        )
+
+    assert result["result"] == 42
+
+
+# ── create_workergroup ───────────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_create_workergroup(provider: VastProvider) -> None:
+    resp = {"success": True, "id": 789}
+
+    async def mock_send(self, request, **kwargs):
+        assert "/api/v0/workergroups/" in str(request.url)
+        body = json.loads(request.content)
+        assert body["endpoint_name"] == "my-ep"
+        assert body["template_hash"] == "abc123"
+        assert body["gpu_ram"] == 24576
+        return _mock_response(200, resp)
+
+    with patch.object(httpx.AsyncClient, "send", mock_send):
+        result = await provider.create_workergroup(
+            "key", endpoint_name="my-ep", template_hash="abc123", gpu_ram=24576,
+        )
+
+    assert result["id"] == 789
+
+
+# ── create_endpoint (full flow) ──────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_create_endpoint_success(provider: VastProvider) -> None:
+    template_resp = {"success": True, "template": {"id": 100, "hash_id": "tpl_hash", "name": "visgate-ep1"}}
+    endpoint_resp = {"success": True, "result": 42}
+    wg_resp = {"success": True, "id": 789}
+
+    call_log: list[str] = []
+
+    async def mock_send(self, request, **kwargs):
+        url = str(request.url)
+        if "/api/v0/template/" in url:
+            call_log.append("template")
+            return _mock_response(200, template_resp)
+        if "/api/v0/endptjobs/" in url:
+            call_log.append("endpoint")
+            return _mock_response(200, endpoint_resp)
+        if "/api/v0/workergroups/" in url:
+            call_log.append("workergroup")
+            return _mock_response(200, wg_resp)
+        return _mock_response(404, text="not found")
+
+    with patch.object(httpx.AsyncClient, "send", mock_send):
+        ep = await provider.create_endpoint(
+            name="ep1",
+            gpu_id="24",
+            image="visgateai/inference-image:latest",
+            env={"HF_MODEL_ID": "stabilityai/sd-turbo"},
+            api_key="test-key",
+        )
+
+    assert call_log == ["template", "endpoint", "workergroup"]
+    assert ep["id"] == "42"
+    assert ep["url"] == "vast-ep://ep1"
+    assert ep["raw_response"]["template_hash"] == "tpl_hash"
+    assert ep["raw_response"]["workergroup_id"] == 789
+
+
+@pytest.mark.asyncio
+async def test_create_endpoint_no_template_hash(provider: VastProvider) -> None:
+    template_resp = {"success": True, "template": {"id": 100, "name": "x"}}  # no hash_id
+
+    async def mock_send(self, request, **kwargs):
+        return _mock_response(200, template_resp)
+
+    with patch.object(httpx.AsyncClient, "send", mock_send):
+        with pytest.raises(VastAPIError, match="hash_id"):
+            await provider.create_endpoint(
+                name="ep1", gpu_id="24", image="img:latest", env={}, api_key="key",
+            )
+
+
+@pytest.mark.asyncio
+async def test_create_endpoint_no_endpoint_id(provider: VastProvider) -> None:
+    template_resp = {"success": True, "template": {"id": 1, "hash_id": "h", "name": "n"}}
+    endpoint_resp = {"success": True}  # no result field
+
+    async def mock_send(self, request, **kwargs):
+        url = str(request.url)
+        if "/api/v0/template/" in url:
+            return _mock_response(200, template_resp)
+        return _mock_response(200, endpoint_resp)
+
+    with patch.object(httpx.AsyncClient, "send", mock_send):
+        with pytest.raises(VastAPIError, match="no ID"):
+            await provider.create_endpoint(
+                name="ep1", gpu_id="24", image="img:latest", env={}, api_key="key",
+            )
+
+
+# ── delete_endpoint ──────────────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_delete_endpoint(provider: VastProvider) -> None:
+    async def mock_send(self, request, **kwargs):
+        assert "/api/v0/endptjobs/42/" in str(request.url)
+        assert request.method == "DELETE"
+        return _mock_response(200, {"success": True})
+
+    with patch.object(httpx.AsyncClient, "send", mock_send):
+        await provider.delete_endpoint("42", "test-key")
+
+
+# ── list_endpoints ───────────────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_list_endpoints(provider: VastProvider) -> None:
+    resp = {
+        "success": True,
+        "results": [
+            {"id": 10, "endpoint_name": "ep-alpha", "endpoint_state": "active"},
+            {"id": 11, "endpoint_name": "ep-beta", "endpoint_state": "stopped"},
+        ],
+    }
+
+    async def mock_send(self, request, **kwargs):
+        return _mock_response(200, resp)
+
+    with patch.object(httpx.AsyncClient, "send", mock_send):
+        summaries = await provider.list_endpoints("test-key")
+
+    assert len(summaries) == 2
+    assert summaries[0]["id"] == "10"
+    assert summaries[0]["name"] == "ep-alpha"
+    assert summaries[0]["status"] == "active"
+    assert summaries[0]["url"] == "vast-ep://ep-alpha"
+
+
+# ── list_gpu_types ───────────────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_list_gpu_types(provider: VastProvider) -> None:
+    resp = {
+        "offers": [
+            {"id": 1, "gpu_name": "RTX 4090", "gpu_ram": 24576, "dph_total": 0.45},
+            {"id": 2, "gpu_name": "RTX 4090", "gpu_ram": 24576, "dph_total": 0.50},
+            {"id": 3, "gpu_name": "A100", "gpu_ram": 81920, "dph_total": 1.20},
+        ],
+    }
+
+    async def mock_send(self, request, **kwargs):
+        return _mock_response(200, resp)
+
+    with patch.object(httpx.AsyncClient, "send", mock_send):
+        gpus = await provider.list_gpu_types("test-key")
+
+    assert len(gpus) == 2
+    names = {g["displayName"] for g in gpus}
+    assert "RTX 4090" in names
+    assert "A100" in names
+
+
+# ── route_request ────────────────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_route_request_success(provider: VastProvider) -> None:
+    resp = {"url": "http://10.0.0.1:8000", "reqnum": 1, "signature": "sig"}
+
+    async def mock_send(self, request, **kwargs):
+        assert "run.vast.ai" in str(request.url)
+        assert "/route/" in str(request.url)
+        return _mock_response(200, resp)
+
+    with patch.object(httpx.AsyncClient, "send", mock_send):
+        result = await provider.route_request("key", "my-endpoint")
+
+    assert result["url"] == "http://10.0.0.1:8000"
+
+
+@pytest.mark.asyncio
+async def test_route_request_stopped(provider: VastProvider) -> None:
+    resp = {"status": "Stopped"}
+
+    async def mock_send(self, request, **kwargs):
+        return _mock_response(200, resp)
+
+    with patch.object(httpx.AsyncClient, "send", mock_send):
+        result = await provider.route_request("key", "my-endpoint")
+
+    assert result["status"] == "Stopped"
+
+
+# ── submit_job ───────────────────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_submit_job_success(provider: VastProvider) -> None:
+    route_resp = {"url": "http://10.0.0.1:8000", "reqnum": 1, "signature": "sig"}
+    job_resp = {"id": "job-42", "status": "IN_QUEUE"}
+
+    async def mock_send(self, request, **kwargs):
+        url = str(request.url)
+        if "/route/" in url:
+            return _mock_response(200, route_resp)
+        if "/run" in url:
+            assert "10.0.0.1" in url
+            return _mock_response(200, job_resp)
+        return _mock_response(404, text="not found")
+
+    with patch.object(httpx.AsyncClient, "send", mock_send):
+        accepted = await provider.submit_job(
+            "vast-ep://my-endpoint",
+            "api-key",
+            {"prompt": "a cat"},
+        )
+
+    assert _JOB_ID_SEP in accepted["id"]
+    worker_url, actual_id = VastProvider.decode_job_id(accepted["id"])
+    assert worker_url == "http://10.0.0.1:8000"
+    assert actual_id == "job-42"
+    assert accepted["status"] == "IN_QUEUE"
+
+
+@pytest.mark.asyncio
+async def test_submit_job_no_workers(provider: VastProvider) -> None:
+    route_resp = {"status": "Stopped"}
+
+    async def mock_send(self, request, **kwargs):
+        return _mock_response(200, route_resp)
+
+    with patch.object(httpx.AsyncClient, "send", mock_send):
+        with pytest.raises(VastAPIError, match="stopped"):
+            await provider.submit_job("vast-ep://my-endpoint", "key", {})
+
+
+@pytest.mark.asyncio
+async def test_submit_job_worker_error(provider: VastProvider) -> None:
+    route_resp = {"url": "http://10.0.0.1:8000", "reqnum": 1, "signature": "sig"}
+
+    async def mock_send(self, request, **kwargs):
+        url = str(request.url)
+        if "/route/" in url:
+            return _mock_response(200, route_resp)
+        return _mock_response(500, text="Internal Server Error")
+
+    with patch.object(httpx.AsyncClient, "send", mock_send):
+        with pytest.raises(VastAPIError, match="500"):
+            await provider.submit_job("vast-ep://my-endpoint", "key", {"prompt": "x"})
+
+
+# ── get_job_status ───────────────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_get_job_status_completed(provider: VastProvider) -> None:
+    status_resp = {"id": "job-42", "status": "COMPLETED", "output": {"url": "http://example.com/out.png"}}
+    composite_id = VastProvider.encode_job_id("http://10.0.0.1:8000", "job-42")
+
+    async def mock_send(self, request, **kwargs):
+        assert "10.0.0.1" in str(request.url)
+        assert "/status/job-42" in str(request.url)
+        return _mock_response(200, status_resp)
+
+    with patch.object(httpx.AsyncClient, "send", mock_send):
+        status = await provider.get_job_status("vast-ep://my-endpoint", composite_id, "key")
+
+    assert status["status"] == "COMPLETED"
+    assert status["output"]["url"] == "http://example.com/out.png"
+
+
+@pytest.mark.asyncio
+async def test_get_job_status_no_worker_url(provider: VastProvider) -> None:
+    with pytest.raises(VastAPIError, match="Cannot determine worker URL"):
+        await provider.get_job_status("vast-ep://ep", "plain-id-no-sep", "key")
+
+
+# ── get_endpoint_workers ─────────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_get_endpoint_workers(provider: VastProvider) -> None:
+    resp = {"workers": [{"id": 1, "status": "running", "url": "http://10.0.0.1:8000"}]}
+
+    async def mock_send(self, request, **kwargs):
+        assert "run.vast.ai" in str(request.url)
+        assert "/get_endpoint_workers/" in str(request.url)
+        return _mock_response(200, resp)
+
+    with patch.object(httpx.AsyncClient, "send", mock_send):
+        result = await provider.get_endpoint_workers("key", 42)
+
+    assert len(result["workers"]) == 1
+    assert result["workers"][0]["status"] == "running"
+
+
+# ── check_endpoint_health ────────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_check_endpoint_health_running(provider: VastProvider) -> None:
+    resp = {"workers": [{"id": 1, "status": "running"}, {"id": 2, "status": "loading"}]}
+
+    async def mock_send(self, request, **kwargs):
+        return _mock_response(200, resp)
+
+    with patch.object(httpx.AsyncClient, "send", mock_send):
+        health = await provider.check_endpoint_health("42", "key")
+
+    assert health["status"] == "ready"
+    assert health["running_count"] == 1
+    assert health["total_count"] == 2
+
+
+@pytest.mark.asyncio
+async def test_check_endpoint_health_no_workers(provider: VastProvider) -> None:
+    resp = {"workers": []}
+
+    async def mock_send(self, request, **kwargs):
+        return _mock_response(200, resp)
+
+    with patch.object(httpx.AsyncClient, "send", mock_send):
+        health = await provider.check_endpoint_health("42", "key")
+
+    assert health["status"] == "no_workers"
+    assert health["running_count"] == 0
+
+
+@pytest.mark.asyncio
+async def test_check_endpoint_health_api_error(provider: VastProvider) -> None:
+    async def mock_send(self, request, **kwargs):
+        return _mock_response(401, text="Unauthorized")
+
+    with patch.object(httpx.AsyncClient, "send", mock_send):
+        health = await provider.check_endpoint_health("42", "key")
+
+    assert health["status"] == "error"
+
+
+# ── get_run_url ──────────────────────────────────────────────────────────────
+
+def test_get_run_url(provider: VastProvider) -> None:
+    assert provider.get_run_url("12345") == "https://run.vast.ai/route/"
+
+
+# ── provider_factory registration ────────────────────────────────────────────
+
+def test_vast_registered_in_factory() -> None:
+    from src.services.provider_factory import get_provider
+
+    p = get_provider("vast")
+    assert isinstance(p, VastProvider)
