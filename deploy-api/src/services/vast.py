@@ -210,8 +210,8 @@ class VastProvider(BaseInferenceProvider):
         self,
         api_key: str,
         endpoint_id: int | str,
-    ) -> dict[str, Any]:
-        """POST /get_endpoint_workers/ on run.vast.ai → {workers: [...]}"""
+    ) -> list[dict[str, Any]] | dict[str, Any]:
+        """POST /get_endpoint_workers/ on run.vast.ai → list or {workers: [...]}"""
         body = {"id": int(endpoint_id)}
         return await self._request(
             "POST", "/get_endpoint_workers/", api_key,
@@ -512,8 +512,12 @@ class VastProvider(BaseInferenceProvider):
         if isinstance(data, str):
             return {"status": "error", "error": data, "workers": []}
 
-        workers = data.get("workers", [])
-        running = [w for w in workers if w.get("status") == "running"]
+        # Vast.ai may return a list directly or a dict with a "workers" key
+        if isinstance(data, list):
+            workers = data
+        else:
+            workers = data.get("workers", [])
+        running = [w for w in workers if isinstance(w, dict) and w.get("status") == "running"]
         return {
             "status": "ready" if running else ("loading" if workers else "no_workers"),
             "workers": workers,
