@@ -253,6 +253,11 @@ def upload_bytes(
 
 
 def download_to_tempfile(url: str, suffix: str) -> str:
+    # Validate URL scheme to prevent SSRF (file://, ftp://, etc.)
+    from urllib.parse import urlparse
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https"):
+        raise ValueError(f"Invalid URL scheme: {parsed.scheme!r}. Only http/https allowed.")
     max_bytes = int(os.getenv("MAX_INPUT_DOWNLOAD_BYTES", str(512 * 1024 * 1024)))
     chunk_size = 1024 * 1024
     tmp_path = ""

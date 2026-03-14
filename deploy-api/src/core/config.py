@@ -184,17 +184,17 @@ class Settings(BaseSettings):
         description="Maximum concurrent workers per endpoint",
     )
     runpod_idle_timeout_seconds: int = Field(
-        default=300,
+        default=600,
         ge=30,
         le=3600,
         description=(
             "Seconds a worker stays alive after its last job. "
-            "300s is a good balance: absorbs burst traffic without burning too many idle GPU hours. "
+            "600s balances burst traffic absorption vs idle GPU cost. "
             "Lower = cheaper but more cold starts; higher = faster burst but more idle cost."
         ),
     )
     runpod_idle_timeout_seconds_video: int = Field(
-        default=600,
+        default=900,
         ge=30,
         le=3600,
         description="Idle timeout for video workers in seconds to avoid rapid warm-worker eviction.",

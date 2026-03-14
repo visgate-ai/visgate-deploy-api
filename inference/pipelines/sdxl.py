@@ -73,7 +73,9 @@ class SDXLPipeline(BasePipeline):
             return {"error": "No image generated", "model_id": self.model_id}
         img = images[0]
         
-        tmp_path = f"/tmp/{uuid.uuid4().hex}.png"
+        import tempfile
+        tmp_fd, tmp_path = tempfile.mkstemp(suffix=".png")
+        os.close(tmp_fd)
         img.save(tmp_path, format="PNG")
         
         return {

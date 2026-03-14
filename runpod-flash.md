@@ -1,0 +1,160 @@
+> ## Documentation Index
+> Fetch the complete documentation index at: https://docs.runpod.io/llms.txt
+> Use this file to discover all available pages before exploring further.
+
+# Welcome to Runpod
+
+> Explore our guides and examples to deploy your AI/ML application on Runpod.
+
+export const InferenceTooltip = () => {
+  return <Tooltip headline="AI inference" tip="The execution phase where a trained model makes predictions on new data. When you prompt a model and it responds, that's inference.">inference</Tooltip>;
+};
+
+export const FineTuningTooltip = () => {
+  return <Tooltip headline="AI fine-tuning" tip="The process of adapting a pre-trained model to a specific task using a smaller, specialized dataset." cta="Learn more about fine-tuning" href="/fine-tune">fine-tuning</Tooltip>;
+};
+
+export const TrainingTooltip = () => {
+  return <Tooltip headline="AI training" tip="The initial phase of AI model development, in which a model analyzes a dataset to learn patterns and relationships.">training</Tooltip>;
+};
+
+<div className="overview-page-wrapper" />
+
+Runpod is a cloud computing platform built for AI, machine learning, and general compute needs. Whether you're <TrainingTooltip /> or <FineTuningTooltip /> AI models, or deploying cloud-based applications for <InferenceTooltip />, Runpod provides scalable, high-performance GPU and CPU resources to power your workloads.
+
+## Access GPUs instantly
+
+<CardGroup cols={3}>
+  <Card title="Quickstart" href="/get-started" icon="rocket-launch" horizontal>
+    Create an account, deploy your first GPU Pod, and use it to execute code.
+  </Card>
+
+  <Card title="Create an API key" href="/get-started/api-keys" icon="key" horizontal>
+    Create API keys to manage your access to Runpod resources.
+  </Card>
+
+  <Card title="Concepts" href="/get-started/concepts" icon="book" horizontal>
+    Learn about the key concepts and terminology for the Runpod platform.
+  </Card>
+
+  <Card title="Flash (Beta)" href="/flash/overview" icon="bolt" horizontal>
+    Run Python functions on remote GPUs directly from your local terminal.
+  </Card>
+
+  <Card title="Serverless" href="/serverless/overview" icon="cloud" horizontal>
+    Pay-per-second computing with automatic scaling for production AI/ML apps.
+  </Card>
+
+  <Card title="Pods" href="/pods/overview" icon="microchip" horizontal>
+    Dedicated GPU or CPU instances for containerized AI/ML workloads.
+  </Card>
+</CardGroup>
+
+## Use our model endpoints
+
+Runpod offers [Public Endpoints](/public-endpoints/overview) for instant API access to pre-deployed AI models for image, video, audio, and text generation. No deployment or infrastructure required—just [create an API key](/get-started/api-keys) and make a request:
+
+<CodeGroup>
+  ```python Python theme={"theme":{"light":"github-light","dark":"github-dark"}}
+  import requests
+
+  response = requests.post(
+      "https://api.runpod.ai/v2/black-forest-labs-flux-1-schnell/runsync",
+      headers={
+          "Authorization": "Bearer YOUR_API_KEY", # Replace YOUR_API_KEY with your actual API key
+          "Content-Type": "application/json"
+      },
+      json={
+          "input": {
+              "prompt": "A beautiful sunset over mountains", # Customize your prompt
+              "width": 1024,
+              "height": 1024
+          }
+      }
+  )
+
+  result = response.json()
+  print(result["output"]["image_url"])
+  ```
+
+  ```bash cURL theme={"theme":{"light":"github-light","dark":"github-dark"}}
+  # Replace YOUR_API_KEY with your actual API key
+  curl -X POST "https://api.runpod.ai/v2/black-forest-labs-flux-1-schnell/runsync" \
+      -H "Authorization: Bearer YOUR_API_KEY" \
+      -H "Content-Type: application/json" \
+      -d '{
+      "input": {
+          "prompt": "A beautiful sunset over mountains",
+          "width": 1024,
+          "height": 1024
+      }
+      }'
+  ```
+</CodeGroup>
+
+For a list of available models, see the [model reference](/public-endpoints/reference).
+
+## Guides and examples
+
+<CardGroup cols={3}>
+  <Card title="Generate images with ComfyUI" href="/tutorials/pods/comfyui" icon="image" horizontal>
+    Deploy a dedicated GPU with ComfyUI pre-installed and start generating images.
+  </Card>
+
+  <Card title="Generate images at scale" href="/tutorials/serverless/comfyui" icon="wand-magic-sparkles" horizontal>
+    Build a ComfyUI worker and deploy it as a Serverless endpoint.
+  </Card>
+
+  <Card title="Generate images with Flash scripts" href="/tutorials/flash/image-generation-with-sdxl" icon="palette" horizontal>
+    Use a hybrid local/remote script to generate images with SDXL.
+  </Card>
+
+  <Card title="Text-to-video pipeline" href="/tutorials/public-endpoints/text-to-video-pipeline" icon="video" horizontal>
+    Create a multi-model pipeline for video generation.
+  </Card>
+
+  <Card title="Build a load balancing API" href="/tutorials/flash/build-rest-api-with-load-balancer" icon="scale-balanced" horizontal>
+    Create a REST API with automatic load balancing using Flash.
+  </Card>
+
+  <Card title="Deploy vLLM for text generation" href="/serverless/vllm/get-started" icon="comments" horizontal>
+    Deploy a large language model in minutes using vLLM on Serverless.
+  </Card>
+</CardGroup>
+
+## High-performance clusters
+
+Create a multi-node [Instant Cluster](/instant-clusters) for fully managed distributed GPU computing with high-speed networking between nodes.
+
+<CardGroup cols={3}>
+  <Card title="Overview" href="/instant-clusters" icon="diagram-project" horizontal>
+    Learn how Instant Clusters work and when to use them.
+  </Card>
+
+  <Card title="Deploy a Slurm cluster" href="/instant-clusters/slurm-clusters" icon="splotch" horizontal>
+    Set up managed Slurm for HPC workloads.
+  </Card>
+
+  <Card title="Deploy a PyTorch cluster" href="/instant-clusters/pytorch" icon="fire" horizontal>
+    Run distributed PyTorch training across multiple nodes.
+  </Card>
+</CardGroup>
+
+## Support
+
+<CardGroup cols={3}>
+  <Card title="Contact" href="https://contact.runpod.io" icon="headset" horizontal>
+    Submit a support request using our contact page.
+  </Card>
+
+  <Card title="Status page" href="https://uptime.runpod.io/" icon="chart-line" horizontal>
+    Check the status of Runpod services and infrastructure.
+  </Card>
+
+  <Card title="Discord" href="https://discord.gg/cUpRmau42V" icon="discord" horizontal>
+    Join the Runpod community on Discord.
+  </Card>
+</CardGroup>
+
+
+Built with [Mintlify](https://mintlify.com).

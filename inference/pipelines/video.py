@@ -26,10 +26,10 @@ class VideoPipeline(BasePipeline):
         self._pipeline.to(self.device)
         try:
             self._pipeline.enable_model_cpu_offload()
-        except Exception:
+        except AttributeError:
             try:
                 self._pipeline.enable_vae_slicing()
-            except:
+            except AttributeError:
                 pass
 
     def run(
@@ -68,8 +68,10 @@ class VideoPipeline(BasePipeline):
             
         from diffusers.utils import export_to_video
         
-        # We output to a fast NVMe temp path
-        tmp_path = f"/tmp/{uuid.uuid4().hex}.mp4"
+        import tempfile
+        # Use tempfile for thread safety
+        tmp_fd, tmp_path = tempfile.mkstemp(suffix=".mp4")
+        os.close(tmp_fd)
         export_to_video(frames, tmp_path, fps=8)
 
         return {

@@ -71,33 +71,71 @@ class RunpodProvider(BaseInferenceProvider):
         query: str,
         variables: dict[str, Any] | None = None,
         timeout: float = 30.0,
+        _max_retries: int = 3,
     ) -> dict[str, Any]:
+        import asyncio as _aio
+
         payload: dict[str, Any] = {"query": query}
         if variables:
             payload["variables"] = variables
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            resp = await client.post(
-                self.graphql_url,
-                json=payload,
-                params={"api_key": api_key},
-                headers={"Content-Type": "application/json"},
-            )
 
-        if resp.status_code >= 400:
-            body = resp.text
-            record_runpod_api_error()
-            raise RunpodAPIError(
-                message=f"HTTP {resp.status_code}: {body[:500]}",
-                details={"status": resp.status_code},
-            )
+        last_exc: Exception | None = None
+        for attempt in range(_max_retries):
+            try:
+                async with httpx.AsyncClient(timeout=timeout) as client:
+                    resp = await client.post(
+                        self.graphql_url,
+                        json=payload,
+                        params={"api_key": api_key},
+                        headers={"Content-Type": "application/json"},
+                    )
 
-        data = resp.json()
-        if "errors" in data and data["errors"]:
-            record_runpod_api_error()
-            raise RunpodAPIError(
-                message=data["errors"][0].get("message", "GraphQL error"),
-                details={"errors": data["errors"]},
-            )
+                if resp.status_code == 429 or resp.status_code >= 500:
+                    # Transient — retry with backoff
+                    last_exc = RunpodAPIError(
+                        message=f"HTTP {resp.status_code}: {resp.text[:500]}",
+                        details={"status": resp.status_code},
+                    )
+                    if attempt < _max_retries - 1:
+                        await _aio.sleep(2 ** attempt)
+                        continue
+                    record_runpod_api_error()
+                    raise last_exc
+
+                if resp.status_code >= 400:
+                    body = resp.text
+                    record_runpod_api_error()
+                    raise RunpodAPIError(
+                        message=f"HTTP {resp.status_code}: {body[:500]}",
+                        details={"status": resp.status_code},
+                    )
+
+                data = resp.json()
+                if "errors" in data and data["errors"]:
+                    err_msg = data["errors"][0].get("message", "GraphQL error")
+                    # Retry rate-limit / transient GraphQL errors
+                    if any(kw in err_msg.lower() for kw in ("rate", "timeout", "unavailable")) and attempt < _max_retries - 1:
+                        last_exc = RunpodAPIError(message=err_msg, details={"errors": data["errors"]})
+                        await _aio.sleep(2 ** attempt)
+                        continue
+                    record_runpod_api_error()
+                    raise RunpodAPIError(
+                        message=err_msg,
+                        details={"errors": data["errors"]},
+                    )
+                return data.get("data", {})
+
+            except (httpx.TimeoutException, httpx.ConnectError) as exc:
+                last_exc = RunpodAPIError(message=f"Network error: {exc}")
+                if attempt < _max_retries - 1:
+                    await _aio.sleep(2 ** attempt)
+                    continue
+                record_runpod_api_error()
+                raise last_exc from exc
+
+        # Should not reach here, but just in case
+        record_runpod_api_error()
+        raise last_exc or RunpodAPIError(message="GraphQL request failed after retries")
         return data.get("data", {})
 
     async def create_endpoint(

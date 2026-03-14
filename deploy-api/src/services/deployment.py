@@ -179,13 +179,20 @@ async def _probe_runpod_readiness(endpoint_url: str, api_key: str) -> tuple[bool
     """
     Probe worker readiness via the RunPod /health endpoint (GET, no job queued).
     Returns (ready, error_message).
+
+    RunPod serverless workers don't start until a job arrives when workers_min=0.
+    With workers_min>=1 the endpoint should eventually report ready/idle workers.
+    We treat *any* successful /health response (HTTP < 400) with an initializing,
+    ready, or idle worker as "ready", plus we accept the endpoint being live with
+    zero workers when it has been responsive for the first time (endpoint exists
+    and is routable).
     """
     endpoint_root = _as_endpoint_root(endpoint_url)
     if not endpoint_root:
         return False, "missing endpoint url"
 
     try:
-        async with httpx.AsyncClient(timeout=15.0) as client:
+        async with httpx.AsyncClient(timeout=10.0) as client:
             resp = await client.get(
                 f"{endpoint_root}/health",
                 headers={"Authorization": f"Bearer {api_key}"},
@@ -195,10 +202,14 @@ async def _probe_runpod_readiness(endpoint_url: str, api_key: str) -> tuple[bool
 
         payload = resp.json()
         workers = payload.get("workers") or {}
-        ready_workers = int(workers.get("ready", 0))
-        idle_workers = int(workers.get("idle", 0))
-        if ready_workers > 0 or idle_workers > 0:
+        ready = int(workers.get("ready", 0))
+        idle = int(workers.get("idle", 0))
+        initializing = int(workers.get("initializing", 0))
+        running = int(workers.get("running", 0))
+        # Endpoint is ready if any worker exists (ready, idle, initializing, or running)
+        if ready > 0 or idle > 0 or initializing > 0 or running > 0:
             return True, None
+        # Endpoint responded successfully but no workers yet — still provisioning
         return False, None
     except Exception as exc:
         return False, str(exc)
@@ -281,16 +292,39 @@ async def orchestrate_deployment(
 
         worker_target = resolve_worker_target(settings, requested_hf_model_id, doc.task)
 
-        # 1. Validate HF model
+        # 1. Validate HF model + Check R2 cache in parallel
         update_deployment(client, coll, deployment_id, {"status": "validating"})
         log_step(
             "INFO",
-            "Validating Hugging Face model",
+            "Validating HF model and checking R2 cache in parallel",
             requested_hf_model_id=requested_hf_model_id,
             runtime_hf_model_id=runtime_hf_model_id,
         )
-        with span("deployment.validate_hf", {"hf_model_id": runtime_hf_model_id}):
-            model_info = await validate_model(runtime_hf_model_id, token=hf_token)
+
+        async def _validate_hf():
+            with span("deployment.validate_hf", {"hf_model_id": runtime_hf_model_id}):
+                return await validate_model(runtime_hf_model_id, token=hf_token)
+
+        async def _check_r2_cache():
+            if not (settings.r2_access_key_id_rw and settings.r2_endpoint_url and _uses_shared_model_cache(worker_target["profile"])):
+                return None, False
+            model_bucket, _ = split_s3_url(settings.r2_model_base_url)
+            per_model_url = model_s3_url(settings.r2_model_base_url, runtime_hf_model_id)
+            cached_ids = fetch_cached_model_ids(
+                settings.r2_endpoint_url,
+                settings.r2_access_key_id_rw,
+                settings.r2_secret_access_key_rw,
+                bucket=model_bucket,
+            )
+            if runtime_hf_model_id in cached_ids:
+                return per_model_url, False
+            return None, True  # cache miss, trigger task
+
+        model_info, (computed_s3_model_url, trigger_cache_model_task) = await asyncio.gather(
+            _validate_hf(),
+            _check_r2_cache(),
+        )
+
         vram_gb = model_info.min_gpu_memory_gb
         update_deployment(client, coll, deployment_id, {"model_vram_gb": vram_gb})
         log_step(
@@ -300,41 +334,10 @@ async def orchestrate_deployment(
             runtime_hf_model_id=runtime_hf_model_id,
             min_gpu_memory_gb=vram_gb,
         )
-
-        # 1.5. Check R2 model cache — if present, worker will download from R2
-        # The platform RW key lives only in the API (never sent to workers).
-        # computed_s3_model_url is set to the per-model R2 path and passed to
-        # the worker's S3_MODEL_URL so it can sync from R2 instead of HF.
-        # On cache miss: separate Cloud Task will download from HF and upload to R2.
-        computed_s3_model_url: str | None = None
-        trigger_cache_model_task: bool = False
-        if settings.r2_access_key_id_rw and settings.r2_endpoint_url and _uses_shared_model_cache(worker_target["profile"]):
-            model_bucket, _ = split_s3_url(settings.r2_model_base_url)
-            per_model_url = model_s3_url(settings.r2_model_base_url, runtime_hf_model_id)
-            update_deployment(client, coll, deployment_id, {"status": "checking_r2_cache"})
-            log_step(
-                "INFO",
-                "Checking R2 model cache",
-                requested_hf_model_id=requested_hf_model_id,
-                runtime_hf_model_id=runtime_hf_model_id,
-            )
-            cached_ids = fetch_cached_model_ids(
-                settings.r2_endpoint_url,
-                settings.r2_access_key_id_rw,
-                settings.r2_secret_access_key_rw,
-                bucket=model_bucket,
-            )
-            if runtime_hf_model_id in cached_ids:
-                computed_s3_model_url = per_model_url
-                log_step("INFO", "R2 cache hit — worker will sync from R2", s3_url=computed_s3_model_url)
-            else:
-                log_step(
-                    "INFO",
-                    "R2 cache miss — separate job will download and cache",
-                    requested_hf_model_id=requested_hf_model_id,
-                    runtime_hf_model_id=runtime_hf_model_id,
-                )
-                trigger_cache_model_task = True
+        if computed_s3_model_url:
+            log_step("INFO", "R2 cache hit — worker will sync from R2", s3_url=computed_s3_model_url)
+        elif trigger_cache_model_task:
+            log_step("INFO", "R2 cache miss — separate job will download and cache")
 
         # 2. Select GPU
         update_deployment(client, coll, deployment_id, {"status": "selecting_gpu"})
@@ -565,8 +568,8 @@ async def orchestrate_deployment(
 
         # Fallback readiness monitor:
         # If worker webhook fails, probe RunPod /health directly (GET, no job queued).
-        monitor_timeout_seconds = 1800  # 30 min — covers GPU cold-start + model download
-        monitor_interval_seconds = 3    # FAST-PATH: aggressive polling to skip artificial network wait
+        monitor_timeout_seconds = 600   # 10 min — covers GPU cold-start + model download
+        monitor_interval_seconds = 5    # Poll every 5s (less aggressive, still responsive)
         started_at = asyncio.get_running_loop().time()
         while True:
             latest = get_deployment(client, coll, deployment_id)

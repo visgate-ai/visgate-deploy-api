@@ -90,26 +90,31 @@ def sync_from_s3(s3_url: str, local_path: str) -> bool:
     subproc_env.pop("AWS_REGION", None)
 
     t_sync_start = time.time()
-    try:
-        subprocess.run(cmd, check=True, env=subproc_env)
-        t_sync_elapsed = time.time() - t_sync_start
-        # s5cmd exits 0 even when the source glob matched nothing ("no object found").
-        # Detect this: if the destination has no files the sync silently did nothing.
-        file_count = _count_local_files(local_path)
-        if file_count == 0:
-            _log("WARN", f"❌ S3 sync appeared to succeed but destination is empty (s5cmd 'no object found'). Falling back to HuggingFace.")
-            import shutil
-            shutil.rmtree(local_path, ignore_errors=True)
-            return False
-        # Write completion marker only after confirming files were actually synced
-        with open(marker_path, "w") as f:
-            f.write("ok")
-        _log("INFO", f"✅ S3 sync complete. files={file_count} elapsed={t_sync_elapsed:.1f}s")
-        return True
-    except subprocess.CalledProcessError as e:
-        t_sync_elapsed = time.time() - t_sync_start
-        _log("WARN", f"❌ S3 sync failed (exit {e.returncode}) after {t_sync_elapsed:.1f}s, falling back to HuggingFace.")
-        return False
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            subprocess.run(cmd, check=True, env=subproc_env)
+            t_sync_elapsed = time.time() - t_sync_start
+            file_count = _count_local_files(local_path)
+            if file_count == 0:
+                _log("WARN", "S3 sync appeared to succeed but destination is empty. Falling back to HuggingFace.")
+                import shutil
+                shutil.rmtree(local_path, ignore_errors=True)
+                return False
+            with open(marker_path, "w") as f:
+                f.write("ok")
+            _log("INFO", f"S3 sync complete. files={file_count} elapsed={t_sync_elapsed:.1f}s")
+            return True
+        except subprocess.CalledProcessError as e:
+            t_sync_elapsed = time.time() - t_sync_start
+            if attempt < max_retries - 1:
+                import random
+                wait = (2 ** attempt) + random.uniform(0, 1)
+                _log("WARN", f"S3 sync attempt {attempt + 1} failed (exit {e.returncode}) after {t_sync_elapsed:.1f}s, retrying in {wait:.1f}s...")
+                time.sleep(wait)
+            else:
+                _log("WARN", f"S3 sync failed after {max_retries} attempts (exit {e.returncode}), falling back to HuggingFace.")
+                return False
 
 
 def load_pipeline_optimized(model_id: str, token: str = None, device: str = "cuda") -> tuple[Any, bool, dict[str, float | bool | None]]:
@@ -128,7 +133,19 @@ def load_pipeline_optimized(model_id: str, token: str = None, device: str = "cud
 
     if not use_local:
         # Speed up HF Hub downloads with hf_transfer (C-based, ~5× faster)
-        os.environ.setdefault("HF_HUB_ENABLE_HF_TRANSFER", "1")
+        try:
+            import hf_transfer  # noqa: F401
+            os.environ.setdefault("HF_HUB_ENABLE_HF_TRANSFER", "1")
+        except ImportError:
+            _log("WARN", "hf_transfer not installed, using slower Python download")
+    else:
+        # Only set offline mode after verifying model files actually exist
+        model_index = os.path.join(model_id, "model_index.json")
+        config_json = os.path.join(model_id, "config.json")
+        if os.path.exists(model_index) or os.path.exists(config_json):
+            os.environ["TRANSFORMERS_OFFLINE"] = "1"
+        else:
+            _log("WARN", "Local model missing index/config, NOT setting offline mode")
 
     _log("INFO", f"Loading pipeline from: {model_id} (local={use_local})")
     from pipelines.registry import load_pipeline

@@ -411,9 +411,12 @@ def handler(job: dict[str, Any]) -> dict[str, Any]:
         global _last_request_at
         with _state_lock:
             _last_request_at = time.time()
-        started_at = time.time()
-        with _state_lock:
             task_kind = _task_kind
+            current_pipeline = _pipeline
+        started_at = time.time()
+
+        if current_pipeline is None:
+            return {"error": "Pipeline was unloaded during request", "status": "failed"}
 
         if task_kind == "text2img":
             result = _handle_image(job, job_input)
@@ -429,14 +432,27 @@ def handler(job: dict[str, Any]) -> dict[str, Any]:
             
         return result
     except Exception as exc:
-        import traceback
+        import traceback as _tb
         with _state_lock:
             _failure_count += 1
             failure_count = _failure_count
         log_tunnel("ERROR", f"Inference failed: {exc}")
         if failure_count >= CLEANUP_FAILURE_THRESHOLD:
             request_cleanup("inference_failure_threshold")
-        return {"error": str(exc), "traceback": traceback.format_exc(), "model_id": HF_MODEL_ID}
+        # Sanitize traceback to avoid leaking secrets
+        raw_tb = _tb.format_exc()
+        import re
+        sanitized_tb = re.sub(r'(hf_|rpa_|sk-|token=)[A-Za-z0-9_]+', r'\1***', raw_tb)
+        return {"error": str(exc), "traceback": sanitized_tb, "model_id": HF_MODEL_ID}
+    finally:
+        # VRAM cleanup between requests to prevent fragmentation and OOM
+        try:
+            import gc
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        except Exception:
+            pass
 
 
 def main() -> None:
