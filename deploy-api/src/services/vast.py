@@ -281,7 +281,7 @@ class VastProvider(BaseInferenceProvider):
         env = {**env, "WORKER_MODE": "http", "HTTP_PORT": str(_WORKER_HTTP_PORT)}
         env_str = self._env_dict_to_flag_str(env)
 
-        cold_workers = kwargs.get("cold_workers", 0)
+        cold_workers = kwargs.get("cold_workers", 1)
         max_workers = kwargs.get("max_workers", 1)
         endpoint_name = name
 
@@ -332,7 +332,7 @@ class VastProvider(BaseInferenceProvider):
             api_key,
             endpoint_name=endpoint_name,
             template_hash=template_hash,
-            gpu_ram=min_gpu_ram_gb * 1024 if min_gpu_ram_gb else 0,
+            gpu_ram=min_gpu_ram_gb if min_gpu_ram_gb else 0,
             cold_workers=cold_workers,
             max_workers=max_workers,
         )
@@ -517,11 +517,13 @@ class VastProvider(BaseInferenceProvider):
             workers = data
         else:
             workers = data.get("workers", [])
-        running = [w for w in workers if isinstance(w, dict) and w.get("status") == "running"]
+        # Vast.ai worker statuses: "creating", "loading", "ready", "idle", "stopped", "error"
+        _READY_STATUSES = {"ready", "idle"}
+        ready_workers = [w for w in workers if isinstance(w, dict) and w.get("status") in _READY_STATUSES]
         return {
-            "status": "ready" if running else ("loading" if workers else "no_workers"),
+            "status": "ready" if ready_workers else ("loading" if workers else "no_workers"),
             "workers": workers,
-            "running_count": len(running),
+            "running_count": len(ready_workers),
             "total_count": len(workers),
         }
 

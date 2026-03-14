@@ -433,7 +433,7 @@ async def test_get_job_status_no_worker_url(provider: VastProvider) -> None:
 
 @pytest.mark.asyncio
 async def test_get_endpoint_workers(provider: VastProvider) -> None:
-    resp = {"workers": [{"id": 1, "status": "running", "url": "http://10.0.0.1:8000"}]}
+    resp = {"workers": [{"id": 1, "status": "ready", "url": "http://10.0.0.1:8000"}]}
 
     async def mock_send(self, request, **kwargs):
         assert "run.vast.ai" in str(request.url)
@@ -444,14 +444,14 @@ async def test_get_endpoint_workers(provider: VastProvider) -> None:
         result = await provider.get_endpoint_workers("key", 42)
 
     assert len(result["workers"]) == 1
-    assert result["workers"][0]["status"] == "running"
+    assert result["workers"][0]["status"] == "ready"
 
 
 # ── check_endpoint_health ────────────────────────────────────────────────────
 
 @pytest.mark.asyncio
 async def test_check_endpoint_health_running(provider: VastProvider) -> None:
-    resp = {"workers": [{"id": 1, "status": "running"}, {"id": 2, "status": "loading"}]}
+    resp = {"workers": [{"id": 1, "status": "ready"}, {"id": 2, "status": "loading"}]}
 
     async def mock_send(self, request, **kwargs):
         return _mock_response(200, resp)
