@@ -221,6 +221,9 @@ def _derive_cost_index(price: float, p_min: float, p_max: float) -> int:
 
 
 def _runpod_gpu_to_spec(gpu: dict[str, Any], cost_index: int) -> GPUSpec:
+    # Penalize community-only GPUs: they're cheap but rarely provision on serverless
+    if not gpu.get("secureCloud"):
+        cost_index = min(10, cost_index + 3)
     return {
         "id": gpu["id"],
         "display": gpu.get("displayName") or gpu["id"],

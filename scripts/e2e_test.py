@@ -46,6 +46,33 @@ TESTS = {
             "fps": 8,
         },
     },
+    "prompt2audio": {
+        "hf_model_id": "cvssp/audioldm2",
+        "task": "text_to_speech",
+        "input": {
+            "prompt": "a dog barking in a park",
+            "num_inference_steps": 4,
+        },
+    },
+    "image2video": {
+        "hf_model_id": "Wan-AI/Wan2.1-T2V-1.3B",
+        "task": "text_to_video",
+        "input": {
+            "prompt": "a cat walking on grass, slow motion",
+            "num_inference_steps": 4,
+            "num_frames": 8,
+            "fps": 8,
+        },
+    },
+    "image_prompt2image": {
+        "hf_model_id": "stabilityai/sd-turbo",
+        "task": "image_to_image",
+        "input": {
+            "prompt": "a red sports car parked on a sunny street",
+            "input_image_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/4/47/PNG_transparency_demonstration_1.png/280px-PNG_transparency_demonstration_1.png",
+            "num_inference_steps": 2,
+        },
+    },
 }
 
 
