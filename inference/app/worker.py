@@ -455,25 +455,148 @@ def handler(job: dict[str, Any]) -> dict[str, Any]:
             pass
 
 
-def main() -> None:
-    import runpod
+def _idle_watchdog() -> None:
+    while True:
+        time.sleep(15)
+        with _state_lock:
+            pipeline = _pipeline
+            last_request_at = _last_request_at
+        if pipeline is None or last_request_at == 0.0:
+            continue
+        if time.time() - last_request_at > CLEANUP_IDLE_TIMEOUT_SECONDS:
+            log_tunnel("WARNING", "Idle timeout reached, requesting cleanup")
+            request_cleanup("idle_timeout")
+            return
 
-    def _idle_watchdog() -> None:
-        while True:
-            time.sleep(15)
+
+# ── HTTP server mode for non-RunPod providers (Vast.ai, etc.) ──────────────
+
+_jobs: dict[str, dict] = {}
+_jobs_lock = threading.Lock()
+
+
+def _run_job_async(job_id: str, job: dict) -> None:
+    """Execute an inference job in a background thread and store the result."""
+    try:
+        result = handler(job)
+        with _jobs_lock:
+            _jobs[job_id] = {"status": "COMPLETED", "output": result}
+    except Exception as exc:
+        with _jobs_lock:
+            _jobs[job_id] = {"status": "FAILED", "error": str(exc)}
+
+
+def _run_http_server(port: int = 8000) -> None:
+    """Standalone HTTP server for non-RunPod providers (Vast.ai, etc.).
+
+    Routes:
+        POST /run        — async: queues job, returns job ID
+        POST /runsync    — sync: runs job and returns result
+        GET  /status/<id> — poll job status
+        GET  /health     — worker health check
+    """
+    import json
+    import uuid as _uuid
+    from http.server import HTTPServer, BaseHTTPRequestHandler
+
+    class InferenceHTTPHandler(BaseHTTPRequestHandler):
+        def do_POST(self):
+            path = self.path.rstrip("/")
+            if path in ("/run", "/v2/run"):
+                self._handle_run_async()
+            elif path in ("/runsync", "/v2/runsync"):
+                self._handle_runsync()
+            else:
+                self._respond(404, {"error": "not found"})
+
+        def do_GET(self):
+            path = self.path.rstrip("/")
+            if path == "/health":
+                self._handle_health()
+            elif path.startswith("/status/"):
+                job_id = path.split("/status/", 1)[1]
+                self._handle_status(job_id)
+            else:
+                self._respond(404, {"error": "not found"})
+
+        def _read_body(self) -> dict:
+            length = int(self.headers.get("Content-Length", 0))
+            if length == 0:
+                return {}
+            return json.loads(self.rfile.read(length))
+
+        def _handle_run_async(self):
+            body = self._read_body()
+            job_input = body.get("input", body)
+            job_id = str(_uuid.uuid4())
+            job = {"id": job_id, "input": job_input}
+            with _jobs_lock:
+                _jobs[job_id] = {"status": "IN_PROGRESS"}
+            threading.Thread(target=_run_job_async, args=(job_id, job), daemon=True).start()
+            self._respond(200, {"id": job_id, "status": "IN_QUEUE"})
+
+        def _handle_runsync(self):
+            body = self._read_body()
+            job_input = body.get("input", body)
+            job_id = str(_uuid.uuid4())
+            job = {"id": job_id, "input": job_input}
+            try:
+                result = handler(job)
+                self._respond(200, {"id": job_id, "status": "COMPLETED", "output": result})
+            except Exception as exc:
+                self._respond(500, {"id": job_id, "status": "FAILED", "error": str(exc)})
+
+        def _handle_health(self):
             with _state_lock:
-                pipeline = _pipeline
-                last_request_at = _last_request_at
-            if pipeline is None or last_request_at == 0.0:
-                continue
-            if time.time() - last_request_at > CLEANUP_IDLE_TIMEOUT_SECONDS:
-                log_tunnel("WARNING", "Idle timeout reached, requesting cleanup")
-                request_cleanup("idle_timeout")
+                ready = _pipeline is not None
+                error = _load_error
+            workers = {
+                "ready": 1 if ready else 0,
+                "idle": 1 if (ready and _last_request_at == 0.0) else 0,
+                "initializing": 1 if (not ready and error is None) else 0,
+                "running": 0,
+            }
+            self._respond(200, {"workers": workers, "error": error})
+
+        def _handle_status(self, job_id: str):
+            with _jobs_lock:
+                entry = _jobs.get(job_id)
+            if entry is None:
+                self._respond(404, {"id": job_id, "status": "NOT_FOUND", "error": "Job not found"})
                 return
+            resp: dict = {"id": job_id, "status": entry["status"]}
+            if "output" in entry:
+                resp["output"] = entry["output"]
+            if "error" in entry:
+                resp["error"] = entry["error"]
+            self._respond(200, resp)
+
+        def _respond(self, code: int, data: dict):
+            self.send_response(code)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps(data).encode())
+
+        def log_message(self, fmt, *args):
+            # Suppress default stderr logging to keep output clean
+            pass
+
+    print(f"[visgate] Starting HTTP inference server on port {port}")
+    HTTPServer(("0.0.0.0", port), InferenceHTTPHandler).serve_forever()
+
+
+def main() -> None:
+    mode = os.environ.get("WORKER_MODE", "runpod").lower()
 
     threading.Thread(target=_load_model_background, daemon=True).start()
     threading.Thread(target=_idle_watchdog, daemon=True).start()
-    runpod.serverless.start({"handler": handler})
+
+    if mode == "http":
+        http_port = int(os.environ.get("HTTP_PORT", "8000"))
+        _run_http_server(port=http_port)
+    else:
+        import runpod
+        runpod.serverless.start({"handler": handler})
 
 
 if __name__ == "__main__":

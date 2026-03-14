@@ -28,4 +28,6 @@ ENV HF_MODEL_ID=""
 ENV DEVICE=cuda
 ENV VISGATE_WORKER_PROFILE=universal
 
+EXPOSE 8000
+
 CMD ["python3", "-m", "app.worker"]

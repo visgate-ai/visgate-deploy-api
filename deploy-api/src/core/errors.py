@@ -61,6 +61,23 @@ class RunpodAPIError(OrchestratorError):
         )
 
 
+class VastAPIError(OrchestratorError):
+    """Raised when Vast.ai API returns an error."""
+
+    def __init__(
+        self,
+        message: str,
+        status_code: int = 502,
+        details: dict[str, Any] | None = None,
+    ) -> None:
+        super().__init__(
+            message=message,
+            status_code=status_code,
+            error_code="VAST_API_ERROR",
+            details=details or {},
+        )
+
+
 class WebhookDeliveryError(OrchestratorError):
     """Raised when user webhook delivery fails after retries."""
 

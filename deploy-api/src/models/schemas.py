@@ -22,6 +22,11 @@ class DeploymentCreate(BaseModel):
         default="text_to_image",
         description="Intended task for compatibility checks",
     )
+    provider: str | None = Field(
+        default=None,
+        max_length=32,
+        description="Inference provider: 'runpod' (default) or 'vast'. Auto-detected if omitted.",
+    )
 
     @field_validator("task", mode="before")
     @classmethod

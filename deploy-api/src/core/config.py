@@ -225,6 +225,20 @@ class Settings(BaseSettings):
         description="RunPod execution timeout for video endpoint jobs in milliseconds",
     )
 
+    # Vast.ai
+    vast_api_key: str = Field(
+        default="",
+        validation_alias=AliasChoices(
+            "visgate_deploy_api_vast_api_key",
+            "vast_api_key",
+        ),
+        description="Vast.ai API key for GPU instance rental.",
+    )
+    vast_api_base: str = Field(
+        default="https://cloud.vast.ai/api/v0",
+        description="Vast.ai REST API base URL",
+    )
+
     # Webhook
     webhook_timeout_seconds: int = Field(default=10, ge=1, le=60)
     webhook_max_retries: int = Field(default=3, ge=1, le=10)
@@ -453,6 +467,7 @@ class Settings(BaseSettings):
         self.r2_secret_access_key_ro = _resolve(self.r2_secret_access_key_ro)
         self.inference_r2_bucket_name_output = _resolve(self.inference_r2_bucket_name_output)
         self.inference_r2_bucket_name_input = _resolve(self.inference_r2_bucket_name_input)
+        self.vast_api_key = _resolve(self.vast_api_key)
 
 
 @lru_cache

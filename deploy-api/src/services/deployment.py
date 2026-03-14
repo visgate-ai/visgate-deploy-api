@@ -1,8 +1,9 @@
-"""Deployment orchestration: validate HF -> select GPU -> create Runpod endpoint -> notify user."""
+"""Deployment orchestration: validate HF -> select GPU -> create endpoint via provider -> notify user."""
 
 import asyncio
 import re
 from datetime import UTC, datetime
+from typing import Any
 
 import httpx
 
@@ -11,6 +12,7 @@ from src.core.errors import (
     HuggingFaceModelNotFoundError,
     RunpodAPIError,
     RunpodInsufficientGPUError,
+    VastAPIError,
 )
 from src.core.logging import structured_log
 from src.core.telemetry import (
@@ -214,6 +216,33 @@ async def _probe_runpod_readiness(endpoint_url: str, api_key: str) -> tuple[bool
     except Exception as exc:
         return False, str(exc)
 
+async def _probe_http_readiness(endpoint_url: str) -> tuple[bool, str | None]:
+    """Probe worker readiness via the plain HTTP /health endpoint (Vast.ai, etc.).
+
+    The HTTP server in the worker returns a JSON response with a ``workers``
+    dict matching the RunPod health shape so the same logic applies.
+    """
+    if not endpoint_url:
+        return False, "missing endpoint url"
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(f"{endpoint_url.rstrip('/')}/health")
+        if resp.status_code >= 400:
+            return False, f"health probe http {resp.status_code}: {resp.text[:200]}"
+        payload = resp.json()
+        workers = payload.get("workers") or {}
+        ready = int(workers.get("ready", 0))
+        idle = int(workers.get("idle", 0))
+        initializing = int(workers.get("initializing", 0))
+        if ready > 0 or idle > 0:
+            return True, None
+        if initializing > 0:
+            return False, None
+        return False, None
+    except Exception as exc:
+        return False, str(exc)
+
+
 async def orchestrate_deployment(
     deployment_id: str,
     runpod_api_key: str | None = None,
@@ -287,8 +316,18 @@ async def orchestrate_deployment(
             log_step("ERROR", "Missing Hugging Face token for orchestration")
             return
         # Logic: Default to runpod for now, but could be fetched from doc metadata
-        provider_name = "runpod"
+        provider_name = getattr(doc, "provider", None) or "runpod"
         provider = get_provider(provider_name)
+
+        # Resolve provider-specific API key
+        if provider_name == "vast":
+            provider_api_key = settings.vast_api_key
+            if not provider_api_key:
+                update_deployment(client, coll, deployment_id, {"status": "failed", "error": "Missing Vast.ai API key"})
+                log_step("ERROR", "Missing Vast.ai API key for orchestration")
+                return
+        else:
+            provider_api_key = user_runpod_key
 
         worker_target = resolve_worker_target(settings, requested_hf_model_id, doc.task)
 
@@ -442,91 +481,112 @@ async def orchestrate_deployment(
             target_ids=target_ids,
             worker_profile=worker_target["profile"],
             image=worker_target["image"],
+            provider=provider_name,
         )
-        # Build the env list for the per-deployment template (RunPod only injects
-        # template-level env as container OS env vars; endpoint env is metadata only)
-        runpod_template_env = [{"key": k, "value": str(v)} for k, v in env.items()]
-        dep_template_id, dep_template_name = await _create_deployment_template(
-            api_key=user_runpod_key,
-            worker_profile=worker_target["profile"],
-            image=worker_target["image"],
-            deployment_id=deployment_id,
-            env=runpod_template_env,
-        )
-        update_deployment(client, coll, deployment_id, {"runpod_dep_template_name": dep_template_name})
-        log_step(
-            "INFO",
-            "Created per-deployment RunPod template with env",
-            worker_profile=worker_target["profile"],
-            dep_template_id=dep_template_id,
-            dep_template_name=dep_template_name,
-            image=worker_target["image"],
-        )
-
-        async def create_endpoint_for_gpu_ids(gpu_ids: list[str], workers_max: int):
-            try:
-                return await provider.create_endpoint(
-                    name=endpoint_name,
-                    gpu_ids=gpu_ids,
-                    image=worker_target["image"],
-                    env={},
-                    api_key=user_runpod_key,
-                    template_id=dep_template_id,
-                    execution_timeout_ms=execution_timeout_ms,
-                    workers_min=_workers_min(settings, worker_target["profile"], workers_max),
-                    workers_max=workers_max,
-                    idle_timeout=_idle_timeout(settings, worker_target["profile"]),
-                    scaler_type=settings.runpod_scaler_type,
-                    scaler_value=settings.runpod_scaler_value,
-                    volume_in_gb=settings.runpod_volume_size_gb,
-                    locations=locations,
-                )
-            except Exception as exc:
-                allowed_workers_max = parse_worker_quota_limit(str(exc))
-                if allowed_workers_max is None or allowed_workers_max >= workers_max:
-                    raise
-
-                log_step(
-                    "WARNING",
-                    "RunPod worker quota reduced autoscaling; retrying with a lower worker cap",
-                    requested_workers_max=workers_max,
-                    adjusted_workers_max=allowed_workers_max,
-                )
-                return await provider.create_endpoint(
-                    name=endpoint_name,
-                    gpu_ids=gpu_ids,
-                    image=worker_target["image"],
-                    env={},
-                    api_key=user_runpod_key,
-                    template_id=dep_template_id,
-                    execution_timeout_ms=execution_timeout_ms,
-                    workers_min=_workers_min(settings, worker_target["profile"], allowed_workers_max),
-                    workers_max=allowed_workers_max,
-                    idle_timeout=_idle_timeout(settings, worker_target["profile"]),
-                    scaler_type=settings.runpod_scaler_type,
-                    scaler_value=settings.runpod_scaler_value,
-                    volume_in_gb=settings.runpod_volume_size_gb,
-                    locations=locations,
-                )
 
         endpoint_data = None
         last_error = None
-        try:
-            endpoint_data = await create_endpoint_for_gpu_ids(
-                target_ids,
-                settings.runpod_workers_max,
+
+        if provider_name == "vast":
+            # ── Vast.ai flow: direct instance creation (no template needed) ──
+            # Use VRAM from first candidate as the GPU search criterion
+            first_gpu_id = target_ids[0]
+            try:
+                endpoint_data = await provider.create_endpoint(
+                    name=endpoint_name,
+                    gpu_id=first_gpu_id,
+                    image=worker_target["image"],
+                    env=env,
+                    api_key=provider_api_key,
+                    disk_gb=_container_disk_gb(worker_target["profile"]),
+                )
+            except Exception as e:
+                last_error = e
+                raise
+        else:
+            # ── RunPod flow: per-deployment template + serverless endpoint ──
+            # Build the env list for the per-deployment template (RunPod only injects
+            # template-level env as container OS env vars; endpoint env is metadata only)
+            runpod_template_env = [{"key": k, "value": str(v)} for k, v in env.items()]
+            dep_template_id, dep_template_name = await _create_deployment_template(
+                api_key=user_runpod_key,
+                worker_profile=worker_target["profile"],
+                image=worker_target["image"],
+                deployment_id=deployment_id,
+                env=runpod_template_env,
             )
-        except Exception as e:
-            last_error = e
-            if is_capacity_error(str(e)):
-                log_step("WARNING", "Out of capacity for entire pool; falling back to global search")
-                # Fallback to all candidates if top 3 fail (more expensive/rare ones)
-                full_ids = [c[0] for c in gpu_candidates]
+            update_deployment(client, coll, deployment_id, {"runpod_dep_template_name": dep_template_name})
+            log_step(
+                "INFO",
+                "Created per-deployment RunPod template with env",
+                worker_profile=worker_target["profile"],
+                dep_template_id=dep_template_id,
+                dep_template_name=dep_template_name,
+                image=worker_target["image"],
+            )
+
+            async def create_endpoint_for_gpu_ids(gpu_ids: list[str], workers_max: int):
+                try:
+                    return await provider.create_endpoint(
+                        name=endpoint_name,
+                        gpu_ids=gpu_ids,
+                        image=worker_target["image"],
+                        env={},
+                        api_key=user_runpod_key,
+                        template_id=dep_template_id,
+                        execution_timeout_ms=execution_timeout_ms,
+                        workers_min=_workers_min(settings, worker_target["profile"], workers_max),
+                        workers_max=workers_max,
+                        idle_timeout=_idle_timeout(settings, worker_target["profile"]),
+                        scaler_type=settings.runpod_scaler_type,
+                        scaler_value=settings.runpod_scaler_value,
+                        volume_in_gb=settings.runpod_volume_size_gb,
+                        locations=locations,
+                    )
+                except Exception as exc:
+                    allowed_workers_max = parse_worker_quota_limit(str(exc))
+                    if allowed_workers_max is None or allowed_workers_max >= workers_max:
+                        raise
+
+                    log_step(
+                        "WARNING",
+                        "RunPod worker quota reduced autoscaling; retrying with a lower worker cap",
+                        requested_workers_max=workers_max,
+                        adjusted_workers_max=allowed_workers_max,
+                    )
+                    return await provider.create_endpoint(
+                        name=endpoint_name,
+                        gpu_ids=gpu_ids,
+                        image=worker_target["image"],
+                        env={},
+                        api_key=user_runpod_key,
+                        template_id=dep_template_id,
+                        execution_timeout_ms=execution_timeout_ms,
+                        workers_min=_workers_min(settings, worker_target["profile"], allowed_workers_max),
+                        workers_max=allowed_workers_max,
+                        idle_timeout=_idle_timeout(settings, worker_target["profile"]),
+                        scaler_type=settings.runpod_scaler_type,
+                        scaler_value=settings.runpod_scaler_value,
+                        volume_in_gb=settings.runpod_volume_size_gb,
+                        locations=locations,
+                    )
+
+            try:
                 endpoint_data = await create_endpoint_for_gpu_ids(
-                    full_ids,
+                    target_ids,
                     settings.runpod_workers_max,
                 )
-            else:
+            except Exception as e:
+                last_error = e
+                if is_capacity_error(str(e)):
+                    log_step("WARNING", "Out of capacity for entire pool; falling back to global search")
+                    full_ids = [c[0] for c in gpu_candidates]
+                    endpoint_data = await create_endpoint_for_gpu_ids(
+                        full_ids,
+                        settings.runpod_workers_max,
+                    )
+                else:
+                    raise e
                 raise e
 
         if endpoint_data is None:
@@ -538,21 +598,24 @@ async def orchestrate_deployment(
         endpoint_url = endpoint_data["url"]
 
         # 4. Finalize
+        finalize_fields: dict[str, Any] = {
+            "status": "loading_model",
+            "runpod_endpoint_id": endpoint_id,
+            "endpoint_url": endpoint_url,
+            "gpu_allocated": target_display,
+            "provider": provider_name,
+            "worker_profile": worker_target["profile"],
+            "worker_image": worker_target["image"],
+            "gpu_pool_targeted": target_ids,
+        }
+        # RunPod-specific: track the per-deployment template ID
+        if provider_name != "vast":
+            finalize_fields["worker_template_id"] = dep_template_id
         update_deployment(
             client,
             coll,
             deployment_id,
-            {
-                "status": "loading_model",
-                "runpod_endpoint_id": endpoint_id,
-                "endpoint_url": endpoint_url,
-                "gpu_allocated": target_display,
-                "provider": provider_name,
-                "worker_profile": worker_target["profile"],
-                "worker_template_id": dep_template_id,
-                "worker_image": worker_target["image"],
-                "gpu_pool_targeted": target_ids,
-            },
+            finalize_fields,
         )
         log_step(
             "INFO",
@@ -576,7 +639,8 @@ async def orchestrate_deployment(
                 log_step("WARNING", f"Failed to enqueue cache modeling task: {exc}")
 
         # Fallback readiness monitor:
-        # If worker webhook fails, probe RunPod /health directly (GET, no job queued).
+        # RunPod: probe /health endpoint (GET, no job queued).
+        # Vast.ai: probe instance HTTP server /health endpoint.
         monitor_timeout_seconds = 600   # 10 min — covers GPU cold-start + model download
         monitor_interval_seconds = 5    # Poll every 5s (less aggressive, still responsive)
         started_at = asyncio.get_running_loop().time()
@@ -603,17 +667,23 @@ async def orchestrate_deployment(
                 )
                 return
 
-            if _uses_health_probe_readiness(worker_target["profile"]):
+            if provider_name == "vast":
+                ready, probe_error = await _probe_http_readiness(endpoint_url)
+            elif _uses_health_probe_readiness(worker_target["profile"]):
                 ready, probe_error = await _probe_runpod_readiness(endpoint_url, user_runpod_key)
-                if ready:
-                    log_step("INFO", "Readiness probe succeeded; marking deployment ready")
-                    await mark_deployment_ready_and_notify(
-                        deployment_id,
-                        endpoint_url=_as_run_url(endpoint_url),
-                    )
-                    return
-                if probe_error:
-                    log_step("WARNING", "Readiness probe retry", error=probe_error)
+            else:
+                ready, probe_error = False, None
+
+            if ready:
+                log_step("INFO", "Readiness probe succeeded; marking deployment ready")
+                final_url = endpoint_url if provider_name == "vast" else _as_run_url(endpoint_url)
+                await mark_deployment_ready_and_notify(
+                    deployment_id,
+                    endpoint_url=final_url,
+                )
+                return
+            if probe_error:
+                log_step("WARNING", "Readiness probe retry", error=probe_error)
             await asyncio.sleep(monitor_interval_seconds)
     except HuggingFaceModelNotFoundError as e:
         update_deployment(
@@ -639,6 +709,14 @@ async def orchestrate_deployment(
             {"status": "failed", "error": e.message},
         )
         log_step("ERROR", e.message, error_type="RunpodAPIError")
+    except VastAPIError as e:
+        update_deployment(
+            client,
+            coll,
+            deployment_id,
+            {"status": "failed", "error": e.message},
+        )
+        log_step("ERROR", e.message, error_type="VastAPIError")
     except Exception as e:
         update_deployment(
             client,

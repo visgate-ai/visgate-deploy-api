@@ -246,8 +246,9 @@ async def create_deployment(
     if not body.hf_token:
         raise InvalidDeploymentRequestError("hf_token is required and must belong to the caller")
 
+    requested_provider = (body.provider or "runpod").lower()
     pool_policy = choose_pool_policy(hf_model_id)
-    provider = get_provider("runpod")
+    provider = get_provider(requested_provider)
 
     # Runpod-native warm discovery
     warm_names = [user_endpoint_name(ctx.user_hash, hf_model_id)]
@@ -255,7 +256,7 @@ async def create_deployment(
         warm_names.append(pool_endpoint_name(hf_model_id))
 
     warm_endpoint = None
-    if settings.enable_endpoint_reuse:
+    if settings.enable_endpoint_reuse and requested_provider == "runpod":
         try:
             endpoints = await provider.list_endpoints(runpod_api_key)
             for ep in endpoints:
@@ -336,7 +337,7 @@ async def create_deployment(
         gpu_tier=body.gpu_tier,
         created_at=created_at,
         user_hash=ctx.user_hash,
-        provider="runpod",
+        provider=requested_provider,
         endpoint_name=user_endpoint_name(ctx.user_hash, hf_model_id),
         pool_policy=pool_policy.name,
         region=body.region,
