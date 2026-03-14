@@ -64,7 +64,7 @@ gcloud run deploy "${SERVICE_NAME}" \
   --update-env-vars "DOCKER_IMAGE_AUDIO=visgateai/inference-audio:latest" \
   --update-env-vars "DOCKER_IMAGE_VIDEO=visgateai/inference-video:latest" \
   --update-env-vars "RUNPOD_WORKERS_MAX=1" \
-  --update-env-vars "RUNPOD_WORKERS_MIN=0" \
+  --update-env-vars "RUNPOD_WORKERS_MIN=1" \
   --update-env-vars "RUNPOD_WORKERS_MIN_VIDEO=1" \
   --update-env-vars "RUNPOD_EXECUTION_TIMEOUT_MS=300000" \
   --update-env-vars "RUNPOD_EXECUTION_TIMEOUT_MS_VIDEO=900000" \
