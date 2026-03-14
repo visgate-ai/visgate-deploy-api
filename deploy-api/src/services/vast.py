@@ -171,19 +171,25 @@ class VastProvider(BaseInferenceProvider):
         gpu_ram: int = 0,
         cold_workers: int = 0,
         max_workers: int = 1,
-        search_params: dict[str, Any] | None = None,
+        search_params: str | None = None,
     ) -> dict[str, Any]:
         """POST /api/v0/workergroups/ → {success, id}"""
+        # search_params is required by Vast API and must be a string
+        if not search_params:
+            parts = ["verified=true", "rentable=true", "rented=false"]
+            if gpu_ram > 0:
+                parts.append(f"gpu_ram>={gpu_ram}")
+            search_params = " ".join(parts)
+
         body: dict[str, Any] = {
             "endpoint_name": endpoint_name,
             "template_hash": template_hash,
+            "search_params": search_params,
             "cold_workers": cold_workers,
             "max_workers": max_workers,
         }
         if gpu_ram > 0:
             body["gpu_ram"] = gpu_ram
-        if search_params:
-            body["search_params"] = search_params
         return await self._request("POST", "/api/v0/workergroups/", api_key, json_payload=body)
 
     async def route_request(

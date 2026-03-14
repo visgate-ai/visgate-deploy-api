@@ -55,3 +55,5 @@ cloudflared.log
 
 # Generated artifacts
 istanbul_final.png
+.wrangler/
+vast
