@@ -243,13 +243,13 @@ class VastProvider(BaseInferenceProvider):
     # ── URL helpers ──────────────────────────────────────────────────────
 
     @staticmethod
-    def build_endpoint_url(endpoint_name: str) -> str:
-        """Encode endpoint name as a virtual URL for storage."""
-        return f"vast-ep://{endpoint_name}"
+    def build_endpoint_url(endpoint_id: str) -> str:
+        """Encode endpoint ID as a virtual URL for storage."""
+        return f"vast-ep://{endpoint_id}"
 
     @staticmethod
-    def parse_endpoint_name(endpoint_url: str) -> str:
-        """Extract endpoint name from the virtual URL."""
+    def parse_endpoint_id(endpoint_url: str) -> str:
+        """Extract endpoint ID from the virtual URL."""
         prefix = "vast-ep://"
         if endpoint_url.startswith(prefix):
             return endpoint_url[len(prefix):]
@@ -388,7 +388,7 @@ class VastProvider(BaseInferenceProvider):
 
         return {
             "id": str(ep_id),
-            "url": self.build_endpoint_url(endpoint_name),
+            "url": self.build_endpoint_url(str(ep_id)),
             "raw_response": {
                 "endpoint_id": ep_id,
                 "endpoint_name": endpoint_name,
@@ -413,7 +413,7 @@ class VastProvider(BaseInferenceProvider):
                 "id": ep_id,
                 "name": ep_name or f"vast-{ep_id}",
                 "status": ep.get("endpoint_state", "unknown"),
-                "url": self.build_endpoint_url(ep_name) if ep_name else None,
+                "url": self.build_endpoint_url(ep_id) if ep_id else None,
                 "raw_response": ep,
             })
         return summaries
@@ -452,20 +452,20 @@ class VastProvider(BaseInferenceProvider):
         The worker URL is encoded in the returned job ID so that
         ``get_job_status`` can reach the correct worker later.
         """
-        endpoint_name = self.parse_endpoint_name(endpoint_url)
+        endpoint_id = self.parse_endpoint_id(endpoint_url)
 
         # Ask Vast router for a live worker
-        route_resp = await self.route_request(api_key, endpoint_name)
+        route_resp = await self.route_request(api_key, endpoint_id)
         if isinstance(route_resp, dict) and route_resp.get("status") == "Stopped":
             raise VastAPIError(
                 "No workers available (endpoint stopped)",
-                details={"endpoint": endpoint_name},
+                details={"endpoint": endpoint_id},
             )
         worker_url = route_resp.get("url") if isinstance(route_resp, dict) else None
         if not worker_url:
             raise VastAPIError(
                 "Route returned no worker URL",
-                details={"endpoint": endpoint_name, "response": route_resp},
+                details={"endpoint": endpoint_id, "response": route_resp},
             )
 
         # Build job payload
@@ -531,8 +531,8 @@ class VastProvider(BaseInferenceProvider):
     async def get_endpoint_health(self, endpoint_url: str, api_key: str) -> dict[str, Any]:
         """Check endpoint health via the worker-status API on run.vast.ai.
 
-        ``endpoint_url`` is the stored virtual URL (``vast-ep://<name>``).
-        We parse the endpoint name and look up workers through the router.
+        ``endpoint_url`` is the stored virtual URL (``vast-ep://<id>``).
+        We parse the endpoint ID and look up workers through the router.
         """
         # If this is a direct HTTP URL (e.g. from a worker), probe /health
         if endpoint_url.startswith(("http://", "https://")):

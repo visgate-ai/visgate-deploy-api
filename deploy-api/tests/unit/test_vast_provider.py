@@ -40,13 +40,13 @@ def _mock_response(status_code: int = 200, json_data: Any = None, text: str = ""
 # ── URL/ID helpers ───────────────────────────────────────────────────────────
 
 def test_build_and_parse_endpoint_url() -> None:
-    url = VastProvider.build_endpoint_url("my-endpoint")
-    assert url == "vast-ep://my-endpoint"
-    assert VastProvider.parse_endpoint_name(url) == "my-endpoint"
+    url = VastProvider.build_endpoint_url("14252")
+    assert url == "vast-ep://14252"
+    assert VastProvider.parse_endpoint_id(url) == "14252"
 
 
-def test_parse_endpoint_name_plain() -> None:
-    assert VastProvider.parse_endpoint_name("some-name") == "some-name"
+def test_parse_endpoint_id_plain() -> None:
+    assert VastProvider.parse_endpoint_id("12345") == "12345"
 
 
 def test_encode_decode_job_id() -> None:
@@ -229,7 +229,7 @@ async def test_create_endpoint_success(provider: VastProvider) -> None:
 
     assert call_log == ["template", "endpoint", "workergroup"]
     assert ep["id"] == "42"
-    assert ep["url"] == "vast-ep://ep1"
+    assert ep["url"] == "vast-ep://42"
     assert ep["raw_response"]["template_hash"] == "tpl_hash"
     assert ep["raw_response"]["workergroup_id"] == 789
 
@@ -336,7 +336,7 @@ async def test_list_endpoints(provider: VastProvider) -> None:
     assert summaries[0]["id"] == "10"
     assert summaries[0]["name"] == "ep-alpha"
     assert summaries[0]["status"] == "active"
-    assert summaries[0]["url"] == "vast-ep://ep-alpha"
+    assert summaries[0]["url"] == "vast-ep://10"
 
 
 # ── list_gpu_types ───────────────────────────────────────────────────────────
