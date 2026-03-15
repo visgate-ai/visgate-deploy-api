@@ -33,6 +33,7 @@ from src.services.r2_manifest import (
 )
 from src.services.runpod import create_serverless_template
 from src.services.secret_cache import get_secrets
+from src.services.vast import VastProvider
 from src.services.webhook import notify
 from src.services.worker_routing import resolve_worker_target
 
@@ -716,7 +717,9 @@ async def orchestrate_deployment(
                 return
 
             if provider_name == "vast":
-                health = await provider.check_endpoint_health(endpoint_id, provider_api_key)
+                # Pass both endpoint_id (for workers API) and endpoint_name (for /route/)
+                vast_endpoint_name = VastProvider.parse_endpoint_name(endpoint_url) or str(endpoint_id)
+                health = await provider.check_endpoint_health(endpoint_id, provider_api_key, endpoint_name=vast_endpoint_name)
                 running_count = health.get("running_count", 0)
                 total_count = health.get("total_count", 0)
                 status_name = health.get("status")

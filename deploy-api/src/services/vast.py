@@ -243,17 +243,34 @@ class VastProvider(BaseInferenceProvider):
     # ── URL helpers ──────────────────────────────────────────────────────
 
     @staticmethod
-    def build_endpoint_url(endpoint_id: str) -> str:
-        """Encode endpoint ID as a virtual URL for storage."""
+    def build_endpoint_url(endpoint_id: str, endpoint_name: str = "") -> str:
+        """Encode endpoint ID (and optionally name) as a virtual URL.
+
+        Format: ``vast-ep://<id>/<name>`` — name is needed by the /route/ API.
+        """
+        if endpoint_name:
+            return f"vast-ep://{endpoint_id}/{endpoint_name}"
         return f"vast-ep://{endpoint_id}"
 
     @staticmethod
     def parse_endpoint_id(endpoint_url: str) -> str:
-        """Extract endpoint ID from the virtual URL."""
+        """Extract numeric endpoint ID from the virtual URL."""
         prefix = "vast-ep://"
         if endpoint_url.startswith(prefix):
-            return endpoint_url[len(prefix):]
+            rest = endpoint_url[len(prefix):]
+            return rest.split("/", 1)[0]
         return endpoint_url
+
+    @staticmethod
+    def parse_endpoint_name(endpoint_url: str) -> str:
+        """Extract endpoint name from the virtual URL (empty if not encoded)."""
+        prefix = "vast-ep://"
+        if endpoint_url.startswith(prefix):
+            rest = endpoint_url[len(prefix):]
+            parts = rest.split("/", 1)
+            if len(parts) == 2:
+                return parts[1]
+        return ""
 
     @staticmethod
     def encode_job_id(worker_url: str, actual_job_id: str) -> str:
@@ -388,7 +405,7 @@ class VastProvider(BaseInferenceProvider):
 
         return {
             "id": str(ep_id),
-            "url": self.build_endpoint_url(str(ep_id)),
+            "url": self.build_endpoint_url(str(ep_id), endpoint_name),
             "raw_response": {
                 "endpoint_id": ep_id,
                 "endpoint_name": endpoint_name,
@@ -413,7 +430,7 @@ class VastProvider(BaseInferenceProvider):
                 "id": ep_id,
                 "name": ep_name or f"vast-{ep_id}",
                 "status": ep.get("endpoint_state", "unknown"),
-                "url": self.build_endpoint_url(ep_id) if ep_id else None,
+                "url": self.build_endpoint_url(ep_id, ep_name) if ep_id else None,
                 "raw_response": ep,
             })
         return summaries
@@ -453,9 +470,11 @@ class VastProvider(BaseInferenceProvider):
         ``get_job_status`` can reach the correct worker later.
         """
         endpoint_id = self.parse_endpoint_id(endpoint_url)
+        # /route/ API needs the endpoint name, not the numeric ID
+        endpoint_name = self.parse_endpoint_name(endpoint_url) or endpoint_id
 
         # Ask Vast router for a live worker
-        route_resp = await self.route_request(api_key, endpoint_id)
+        route_resp = await self.route_request(api_key, endpoint_name)
         if isinstance(route_resp, dict) and route_resp.get("status") == "Stopped":
             raise VastAPIError(
                 "No workers available (endpoint stopped)",
@@ -549,7 +568,7 @@ class VastProvider(BaseInferenceProvider):
         # use check_endpoint_health(endpoint_id, ...) instead.
         return {"status": "unknown", "note": "use check_endpoint_health with endpoint_id"}
 
-    async def check_endpoint_health(self, endpoint_id: str, api_key: str) -> dict[str, Any]:
+    async def check_endpoint_health(self, endpoint_id: str, api_key: str, *, endpoint_name: str = "") -> dict[str, Any]:
         """Query Vast.ai for the live workers of a serverless endpoint."""
         try:
             data = await self.get_endpoint_workers(api_key, endpoint_id)
@@ -575,7 +594,7 @@ class VastProvider(BaseInferenceProvider):
         # Direct health probe: Vast PyWorker-based readiness may not apply to custom images.
         # If workers exist but none are Vast-ready, try probing the worker's HTTP /health directly.
         if not ready_workers and workers:
-            probe_url = await self._find_probe_url(workers, endpoint_id, api_key)
+            probe_url = await self._find_probe_url(workers, endpoint_id, api_key, endpoint_name=endpoint_name)
             if probe_url:
                 try:
                     async with httpx.AsyncClient(timeout=8.0) as client:
@@ -639,6 +658,8 @@ class VastProvider(BaseInferenceProvider):
         workers: list[dict[str, Any]],
         endpoint_id: str,
         api_key: str,
+        *,
+        endpoint_name: str = "",
     ) -> str | None:
         """Return a probe URL for the first loading worker.
 
@@ -658,30 +679,31 @@ class VastProvider(BaseInferenceProvider):
                 return url
 
         # Fallback: ask the Vast router for a worker URL
-        return await self._route_probe_url(endpoint_id, api_key)
+        route_name = endpoint_name or endpoint_id
+        return await self._route_probe_url(route_name, api_key)
 
-    async def _route_probe_url(self, endpoint_id: str, api_key: str) -> str | None:
+    async def _route_probe_url(self, endpoint_name: str, api_key: str) -> str | None:
         """Call /route/ and return the worker URL if available."""
         try:
-            route_resp = await self.route_request(api_key, endpoint_id)
+            route_resp = await self.route_request(api_key, endpoint_name)
             if isinstance(route_resp, dict) and route_resp.get("url"):
                 url = route_resp["url"].rstrip("/")
                 structured_log(
                     "INFO",
                     "Route probe fallback: got worker URL",
-                    metadata={"endpoint_id": endpoint_id, "url": url},
+                    metadata={"endpoint_name": endpoint_name, "url": url},
                 )
                 return url
             structured_log(
                 "DEBUG",
                 "Route probe fallback: no URL in response",
-                metadata={"endpoint_id": endpoint_id, "response": str(route_resp)[:200]},
+                metadata={"endpoint_name": endpoint_name, "response": str(route_resp)[:200]},
             )
         except Exception as exc:
             structured_log(
                 "DEBUG",
                 "Route probe fallback: request failed",
-                metadata={"endpoint_id": endpoint_id, "error": str(exc)[:200]},
+                metadata={"endpoint_name": endpoint_name, "error": str(exc)[:200]},
             )
         return None
 

@@ -229,7 +229,7 @@ async def test_create_endpoint_success(provider: VastProvider) -> None:
 
     assert call_log == ["template", "endpoint", "workergroup"]
     assert ep["id"] == "42"
-    assert ep["url"] == "vast-ep://42"
+    assert ep["url"] == "vast-ep://42/ep1"
     assert ep["raw_response"]["template_hash"] == "tpl_hash"
     assert ep["raw_response"]["workergroup_id"] == 789
 
@@ -336,7 +336,7 @@ async def test_list_endpoints(provider: VastProvider) -> None:
     assert summaries[0]["id"] == "10"
     assert summaries[0]["name"] == "ep-alpha"
     assert summaries[0]["status"] == "active"
-    assert summaries[0]["url"] == "vast-ep://10"
+    assert summaries[0]["url"] == "vast-ep://10/ep-alpha"
 
 
 # ── list_gpu_types ───────────────────────────────────────────────────────────
