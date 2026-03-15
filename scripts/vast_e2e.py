@@ -98,7 +98,13 @@ def _poll(url: str, terminal: set[str], *, timeout: int, label: str = "") -> dic
     last: dict[str, Any] | None = None
     prev_status = ""
     while time.time() < deadline:
-        last = _request("GET", url)
+        try:
+            last = _request("GET", url)
+        except Exception as exc:
+            elapsed = int(time.time() - (deadline - timeout))
+            print(f"  [{elapsed:>4}s] {label} poll request error (retrying): {exc}")
+            time.sleep(10)
+            continue
         st = last.get("status", "")
         if st != prev_status:
             elapsed = int(time.time() - (deadline - timeout))
