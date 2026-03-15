@@ -82,8 +82,17 @@ def _build_query_dict(gpu_ram_gb: int = 0, gpu_names: list[str] | None = None) -
         "rented": {"eq": False},
     }
     if gpu_ram_gb > 0:
-        q["gpu_ram"] = {"gte": gpu_ram_gb}  # API uses GB directly
-    normalized = [_normalize_gpu_name_for_search(n) for n in (gpu_names or []) if n]
+        q["gpu_ram"] = {"gte": gpu_ram_gb * 1024}  # API stores MB
+    # Normalize GPU names: strip vendor prefixes but keep spaces
+    # (the JSON dict API uses spaces, unlike the CLI string format)
+    normalized = []
+    for n in (gpu_names or []):
+        name = (n or "").strip()
+        for prefix in ("NVIDIA ", "GeForce "):
+            if name.startswith(prefix):
+                name = name[len(prefix):]
+        if name:
+            normalized.append(name)
     unique = list(dict.fromkeys(normalized))
     if len(unique) == 1:
         q["gpu_name"] = {"eq": unique[0]}
