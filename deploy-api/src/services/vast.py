@@ -665,9 +665,24 @@ class VastProvider(BaseInferenceProvider):
         try:
             route_resp = await self.route_request(api_key, endpoint_id)
             if isinstance(route_resp, dict) and route_resp.get("url"):
-                return route_resp["url"].rstrip("/")
-        except Exception:
-            pass
+                url = route_resp["url"].rstrip("/")
+                structured_log(
+                    "INFO",
+                    "Route probe fallback: got worker URL",
+                    metadata={"endpoint_id": endpoint_id, "url": url},
+                )
+                return url
+            structured_log(
+                "DEBUG",
+                "Route probe fallback: no URL in response",
+                metadata={"endpoint_id": endpoint_id, "response": str(route_resp)[:200]},
+            )
+        except Exception as exc:
+            structured_log(
+                "DEBUG",
+                "Route probe fallback: request failed",
+                metadata={"endpoint_id": endpoint_id, "error": str(exc)[:200]},
+            )
         return None
 
 

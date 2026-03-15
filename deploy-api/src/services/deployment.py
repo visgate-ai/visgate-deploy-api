@@ -688,6 +688,7 @@ async def orchestrate_deployment(
         started_at = asyncio.get_running_loop().time()
         no_workers_since: float | None = None
         vast_hc_count = 0
+        vast_worker_keys_logged = False
         while True:
             latest = get_deployment(client, coll, deployment_id)
             if not latest:
@@ -731,11 +732,17 @@ async def orchestrate_deployment(
                         "worker_statuses": worker_statuses[:5],
                         "error": health.get("error"),
                     }
-                    # Log raw worker keys for first 3 checks to debug field availability
-                    if vast_hc_count <= 3:
-                        raw_workers = health.get("workers", [])
-                        if raw_workers and isinstance(raw_workers[0], dict):
-                            extra_meta["worker_keys"] = sorted(raw_workers[0].keys())[:20]
+                    # Log raw worker keys/values for the first check that has workers
+                    raw_workers = health.get("workers", [])
+                    if raw_workers and isinstance(raw_workers[0], dict) and not vast_worker_keys_logged:
+                        vast_worker_keys_logged = True
+                        w0 = raw_workers[0]
+                        extra_meta["worker_keys"] = sorted(w0.keys())[:30]
+                        # Sample values for key fields
+                        for field in ("public_ipaddr", "ip_addr", "addr", "host", "ports", "status", "machine_id", "instance_id", "port"):
+                            if field in w0:
+                                val = w0[field]
+                                extra_meta[f"w0_{field}"] = str(val)[:200]
                     if health.get("direct_probe_url"):
                         extra_meta["direct_probe_url"] = health["direct_probe_url"]
                     log_step("INFO", f"Vast health check #{vast_hc_count}", **extra_meta)
