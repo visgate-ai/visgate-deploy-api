@@ -627,8 +627,7 @@ async def orchestrate_deployment(
                         settings.runpod_workers_max,
                     )
                 else:
-                    raise e
-                raise e
+                    raise
 
         if endpoint_data is None:
             if last_error:
