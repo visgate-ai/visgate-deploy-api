@@ -153,6 +153,50 @@ async def test_worker_skips_r2_credentials_when_ro_key_is_missing(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_vast_cache_hit_sets_s3_model_url_with_ro_fallback(monkeypatch):
+    """Vast deployments should still get S3_MODEL_URL when RW key is missing but RO key exists."""
+    from src.core.config import get_settings
+
+    get_settings.cache_clear()
+    monkeypatch.setenv("VAST_API_KEY", "vast_test_key")
+    monkeypatch.delenv("VISGATE_DEPLOY_API_INFERENCE_R2_ACCESS_KEY_ID_OUTPUT_RW", raising=False)
+    monkeypatch.delenv("VISGATE_DEPLOY_API_INFERENCE_R2_SECRET_ACCESS_KEY_OUTPUT_RW", raising=False)
+    monkeypatch.setenv("VISGATE_DEPLOY_API_INFERENCE_R2_ACCESS_KEY_ID_INPUT_R", "ro_key_EXPECTED")
+    monkeypatch.setenv("VISGATE_DEPLOY_API_INFERENCE_R2_SECRET_ACCESS_KEY_INPUT_R", "ro_secret_EXPECTED")
+    get_settings.cache_clear()
+
+    captured_env: dict = {}
+
+    async def mock_create_endpoint(**kwargs):
+        captured_env.update(kwargs.get("env", {}))
+        return {"id": "ep-vast-1", "url": "vast-ep://ep-vast-1"}
+
+    mock_provider = MagicMock()
+    mock_provider.create_endpoint = AsyncMock(side_effect=mock_create_endpoint)
+    mock_provider.check_endpoint_health = AsyncMock(return_value={"status": "ready", "running_count": 1})
+
+    vast_doc = _make_deployment_doc()
+    vast_doc.provider = "vast"
+
+    with ExitStack() as stack:
+        _apply_base_patches(stack, mock_provider)
+        stack.enter_context(patch("src.services.deployment.get_deployment", return_value=vast_doc))
+        stack.enter_context(patch("src.services.deployment.fetch_cached_model_ids", return_value=["stabilityai/sd-turbo"]))
+        stack.enter_context(patch("src.services.deployment.mark_deployment_ready_and_notify", new_callable=AsyncMock, return_value=True))
+
+        from src.services.deployment import orchestrate_deployment
+
+        await orchestrate_deployment(
+            deployment_id="dep_vast_cache",
+            runpod_api_key="rpa_userkey",
+            hf_token_override="hf_user_token",
+        )
+
+    assert captured_env.get("S3_MODEL_URL") == "s3://visgate-models/models/stabilityai--sd-turbo"
+    get_settings.cache_clear()
+
+
+@pytest.mark.asyncio
 async def test_runpod_api_key_in_worker_env(monkeypatch):
     """RUNPOD_API_KEY is always injected into worker env for self-cleanup."""
     from src.core.config import get_settings
@@ -275,6 +319,11 @@ async def test_caller_hf_token_is_injected_into_worker(monkeypatch):
     assert captured_env.get("HF_TOKEN") == "hf_caller_token"
     get_settings.cache_clear()
 
+
+def test_as_run_url_keeps_vast_virtual_url() -> None:
+    from src.services.deployment import _as_run_url
+
+    assert _as_run_url("vast-ep://my-endpoint") == "vast-ep://my-endpoint"
 
 @pytest.mark.asyncio
 async def test_worker_target_is_persisted_and_logged(monkeypatch):
@@ -528,5 +577,179 @@ async def test_video_deployment_uses_r2_cache_hit_s3_url(monkeypatch):
     # R2 cache is now enabled for video; on a cache HIT the worker gets S3_MODEL_URL
     assert "S3_MODEL_URL" in tpl_env
     assert tpl_env["HF_MODEL_ID"] == "Wan-AI/Wan2.1-T2V-1.3B-Diffusers"
+    get_settings.cache_clear()
+
+
+@pytest.mark.asyncio
+async def test_vast_failed_status_triggers_endpoint_cleanup(monkeypatch):
+    from src.core.config import get_settings
+
+    get_settings.cache_clear()
+    monkeypatch.setenv("VAST_API_KEY", "vast_test_key")
+    get_settings.cache_clear()
+
+    initial_doc = _make_deployment_doc()
+    initial_doc.provider = "vast"
+    failed_doc = _make_deployment_doc(status="failed")
+    failed_doc.provider = "vast"
+
+    mock_provider = MagicMock()
+    mock_provider.create_endpoint = AsyncMock(return_value={"id": "14199", "url": "vast-ep://dep"})
+    mock_provider.delete_endpoint = AsyncMock(return_value=None)
+    mock_provider.check_endpoint_health = AsyncMock(return_value={"status": "loading", "running_count": 0})
+
+    with ExitStack() as stack:
+        _apply_base_patches(stack, mock_provider)
+        stack.enter_context(
+            patch(
+                "src.services.deployment.get_deployment",
+                side_effect=[initial_doc, failed_doc],
+            )
+        )
+        stack.enter_context(patch("src.services.gpu_registry.fetch_live_gpu_registry", new_callable=AsyncMock, return_value=[]))
+
+        from src.services.deployment import orchestrate_deployment
+
+        await orchestrate_deployment(
+            deployment_id="dep_vast_cleanup",
+            runpod_api_key="rpa_user_key",
+            hf_token_override="hf_user_token",
+        )
+
+    mock_provider.delete_endpoint.assert_awaited_once_with("14199", "vast_test_key")
+    get_settings.cache_clear()
+
+
+@pytest.mark.asyncio
+async def test_vast_create_endpoint_uses_nonzero_cold_workers(monkeypatch):
+    from src.core.config import get_settings
+
+    get_settings.cache_clear()
+    monkeypatch.setenv("VAST_API_KEY", "vast_test_key")
+    monkeypatch.setenv("RUNPOD_WORKERS_MIN", "1")
+    monkeypatch.setenv("RUNPOD_WORKERS_MAX", "1")
+    get_settings.cache_clear()
+
+    initial_doc = _make_deployment_doc()
+    initial_doc.provider = "vast"
+    ready_doc = _make_deployment_doc(status="ready")
+    ready_doc.provider = "vast"
+
+    captured_kwargs: dict = {}
+
+    async def mock_create_endpoint(**kwargs):
+        captured_kwargs.update(kwargs)
+        return {"id": "14200", "url": "vast-ep://dep"}
+
+    mock_provider = MagicMock()
+    mock_provider.create_endpoint = AsyncMock(side_effect=mock_create_endpoint)
+    mock_provider.delete_endpoint = AsyncMock(return_value=None)
+
+    with ExitStack() as stack:
+        _apply_base_patches(stack, mock_provider)
+        stack.enter_context(
+            patch(
+                "src.services.deployment.get_deployment",
+                side_effect=[initial_doc, ready_doc],
+            )
+        )
+        stack.enter_context(patch("src.services.gpu_registry.fetch_live_gpu_registry", new_callable=AsyncMock, return_value=[]))
+
+        from src.services.deployment import orchestrate_deployment
+
+        await orchestrate_deployment(
+            deployment_id="dep_vast_cold_workers",
+            runpod_api_key="rpa_user_key",
+            hf_token_override="hf_user_token",
+        )
+
+    assert captured_kwargs.get("cold_workers") == 1
+    assert captured_kwargs.get("max_workers") == 1
+    assert captured_kwargs.get("gpu_id") == "8"
+    assert captured_kwargs.get("gpu_ids") == ["GPU_A40"]
+    get_settings.cache_clear()
+
+
+@pytest.mark.asyncio
+async def test_vast_deployment_uses_r2_cache(monkeypatch):
+    from src.core.config import get_settings
+
+    get_settings.cache_clear()
+    monkeypatch.setenv("VAST_API_KEY", "vast_test_key")
+    monkeypatch.setenv("VISGATE_DEPLOY_API_INFERENCE_R2_ACCESS_KEY_ID_OUTPUT_RW", "rw_key")
+    monkeypatch.setenv("VISGATE_DEPLOY_API_INFERENCE_R2_SECRET_ACCESS_KEY_OUTPUT_RW", "rw_secret")
+    get_settings.cache_clear()
+
+    initial_doc = _make_deployment_doc()
+    initial_doc.provider = "vast"
+    ready_doc = _make_deployment_doc(status="ready")
+    ready_doc.provider = "vast"
+
+    captured_kwargs: dict = {}
+
+    async def mock_create_endpoint(**kwargs):
+        captured_kwargs.update(kwargs)
+        return {"id": "14202", "url": "vast-ep://dep"}
+
+    mock_provider = MagicMock()
+    mock_provider.create_endpoint = AsyncMock(side_effect=mock_create_endpoint)
+
+    with ExitStack() as stack:
+        _apply_base_patches(stack, mock_provider)
+        stack.enter_context(
+            patch(
+                "src.services.deployment.get_deployment",
+                side_effect=[initial_doc, ready_doc],
+            )
+        )
+        stack.enter_context(patch("src.services.gpu_registry.fetch_live_gpu_registry", new_callable=AsyncMock, return_value=[]))
+        fetch_cached_mock = stack.enter_context(patch("src.services.deployment.fetch_cached_model_ids", return_value=["stabilityai/sd-turbo"]))
+
+        from src.services.deployment import orchestrate_deployment
+
+        await orchestrate_deployment(
+            deployment_id="dep_vast_no_cache",
+            runpod_api_key="rpa_user_key",
+            hf_token_override="hf_user_token",
+        )
+
+    fetch_cached_mock.assert_called_once()
+    assert captured_kwargs.get("env", {}).get("S3_MODEL_URL") == "s3://visgate-models/models/stabilityai--sd-turbo"
+    get_settings.cache_clear()
+
+
+@pytest.mark.asyncio
+async def test_manifest_miss_uses_direct_r2_prefix_fallback(monkeypatch):
+    """If manifest misses model entry but prefix exists, deployment should still inject S3_MODEL_URL."""
+    from src.core.config import get_settings
+
+    get_settings.cache_clear()
+    monkeypatch.setenv("VISGATE_DEPLOY_API_INFERENCE_R2_ACCESS_KEY_ID_OUTPUT_RW", "rw_key")
+    monkeypatch.setenv("VISGATE_DEPLOY_API_INFERENCE_R2_SECRET_ACCESS_KEY_OUTPUT_RW", "rw_secret")
+    get_settings.cache_clear()
+
+    captured_env, template_capturer = _make_template_capturer()
+
+    async def mock_create_endpoint(**kwargs):
+        return {"id": "ep-fallback", "url": "https://api.runpod.ai/v2/ep-fallback/run"}
+
+    mock_provider = MagicMock()
+    mock_provider.create_endpoint = AsyncMock(side_effect=mock_create_endpoint)
+
+    with ExitStack() as stack:
+        _apply_base_patches(stack, mock_provider)
+        stack.enter_context(patch("src.services.deployment.fetch_cached_model_ids", return_value=set()))
+        stack.enter_context(patch("src.services.deployment.model_cached_in_bucket", return_value=True))
+        stack.enter_context(patch("src.services.deployment.create_serverless_template", new_callable=AsyncMock, side_effect=template_capturer))
+
+        from src.services.deployment import orchestrate_deployment
+
+        await orchestrate_deployment(
+            deployment_id="dep_manifest_fallback",
+            runpod_api_key="rpa_key",
+            hf_token_override="hf_user_token",
+        )
+
+    assert captured_env.get("S3_MODEL_URL", "").endswith("/stabilityai--sd-turbo")
     get_settings.cache_clear()
 

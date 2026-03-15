@@ -537,18 +537,20 @@ async def delete_deployment(
     ctx: Annotated[RequestContext, Depends(get_request_context)],
     firestore_client=Depends(get_firestore),
 ) -> None:
-    """Delete deployment and tear down Runpod endpoint."""
+    """Delete deployment and tear down provider endpoint."""
     settings = get_settings()
     doc = get_deployment(firestore_client, settings.firestore_collection_deployments, deployment_id)
     if not doc:
         raise DeploymentNotFoundError(deployment_id)
     if doc.user_hash and doc.user_hash != ctx.user_hash:
         raise DeploymentNotFoundError(deployment_id)
+    provider_name = doc.provider or "runpod"
     if doc.runpod_endpoint_id:
         try:
-            # For now default to runpod, but doc could store the provider name
-            provider = get_provider("runpod")
-            await provider.delete_endpoint(doc.runpod_endpoint_id, ctx.runpod_api_key)
+            provider = get_provider(provider_name)
+            provider_api_key = settings.vast_api_key if provider_name == "vast" else ctx.runpod_api_key
+            if provider_api_key:
+                await provider.delete_endpoint(doc.runpod_endpoint_id, provider_api_key)
         except Exception:  # nosec B110 — best-effort cleanup, deletion failure must not block response
             pass
     if doc.runpod_dep_template_name:

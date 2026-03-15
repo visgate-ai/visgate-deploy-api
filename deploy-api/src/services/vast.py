@@ -47,6 +47,29 @@ _WORKER_HTTP_PORT = 8000
 _JOB_ID_SEP = "||"
 
 
+def _normalize_gpu_name_for_search(gpu_name: str) -> str:
+    normalized = (gpu_name or "").strip()
+    for prefix in ("NVIDIA ", "GeForce "):
+        if normalized.startswith(prefix):
+            normalized = normalized[len(prefix):]
+    return normalized.replace(" ", "_")
+
+
+def _build_search_params(gpu_ram: int, gpu_names: list[str] | None = None) -> str:
+    parts = ["verified=true", "rentable=true", "rented=false"]
+    if gpu_ram > 0:
+        parts.append(f"gpu_ram>={gpu_ram}")
+    normalized_gpu_names = [_normalize_gpu_name_for_search(name) for name in (gpu_names or []) if name]
+    if normalized_gpu_names:
+        unique_gpu_names = list(dict.fromkeys(normalized_gpu_names))
+        if len(unique_gpu_names) == 1:
+            parts.append(f"gpu_name={unique_gpu_names[0]}")
+        else:
+            joined_gpu_names = ", ".join(unique_gpu_names)
+            parts.append(f"gpu_name in [{joined_gpu_names}]")
+    return " ".join(parts)
+
+
 class VastProvider(BaseInferenceProvider):
     """Vast.ai inference provider using the Serverless API."""
 
@@ -171,15 +194,13 @@ class VastProvider(BaseInferenceProvider):
         gpu_ram: int = 0,
         cold_workers: int = 0,
         max_workers: int = 1,
+        gpu_names: list[str] | None = None,
         search_params: str | None = None,
     ) -> dict[str, Any]:
         """POST /api/v0/workergroups/ → {success, id}"""
         # search_params is required by Vast API and must be a string
         if not search_params:
-            parts = ["verified=true", "rentable=true", "rented=false"]
-            if gpu_ram > 0:
-                parts.append(f"gpu_ram>={gpu_ram}")
-            search_params = " ".join(parts)
+            search_params = _build_search_params(gpu_ram, gpu_names)
 
         body: dict[str, Any] = {
             "endpoint_name": endpoint_name,
@@ -281,8 +302,12 @@ class VastProvider(BaseInferenceProvider):
         env = {**env, "WORKER_MODE": "http", "HTTP_PORT": str(_WORKER_HTTP_PORT)}
         env_str = self._env_dict_to_flag_str(env)
 
-        cold_workers = kwargs.get("cold_workers", 1)
-        max_workers = kwargs.get("max_workers", 1)
+        cold_workers = max(1, int(kwargs.get("cold_workers") or 1))
+        max_workers = max(1, int(kwargs.get("max_workers") or 1))
+        candidate_gpu_ids = kwargs.get("gpu_ids")
+        candidate_gpu_names = candidate_gpu_ids if isinstance(candidate_gpu_ids, list) else []
+        if not candidate_gpu_names and gpu_id and not min_gpu_ram_gb:
+            candidate_gpu_names = [gpu_id]
         endpoint_name = name
 
         structured_log(
@@ -292,6 +317,7 @@ class VastProvider(BaseInferenceProvider):
                 "endpoint_name": endpoint_name,
                 "image": image,
                 "gpu_ram_gb": min_gpu_ram_gb,
+                "candidate_gpu_names": candidate_gpu_names,
             },
         )
 
@@ -328,14 +354,35 @@ class VastProvider(BaseInferenceProvider):
         structured_log("INFO", "Vast.ai serverless endpoint created", metadata={"endpoint_id": ep_id})
 
         # 3. Create workergroup connecting template → endpoint
-        wg_resp = await self.create_workergroup(
-            api_key,
-            endpoint_name=endpoint_name,
-            template_hash=template_hash,
-            gpu_ram=min_gpu_ram_gb if min_gpu_ram_gb else 0,
-            cold_workers=cold_workers,
-            max_workers=max_workers,
-        )
+        try:
+            wg_resp = await self.create_workergroup(
+                api_key,
+                endpoint_name=endpoint_name,
+                template_hash=template_hash,
+                gpu_ram=min_gpu_ram_gb if min_gpu_ram_gb else 0,
+                cold_workers=cold_workers,
+                max_workers=max_workers,
+                gpu_names=candidate_gpu_names,
+            )
+        except Exception:
+            try:
+                await self.delete_endpoint(str(ep_id), api_key)
+                structured_log(
+                    "WARNING",
+                    "Vast.ai endpoint cleaned up after workergroup creation failure",
+                    metadata={"endpoint_id": ep_id, "endpoint_name": endpoint_name},
+                )
+            except Exception as cleanup_exc:
+                structured_log(
+                    "WARNING",
+                    "Vast.ai endpoint cleanup failed after workergroup creation failure",
+                    metadata={
+                        "endpoint_id": ep_id,
+                        "endpoint_name": endpoint_name,
+                        "cleanup_error": str(cleanup_exc),
+                    },
+                )
+            raise
         wg_id = wg_resp.get("id")
         structured_log("INFO", "Vast.ai workergroup created", metadata={"workergroup_id": wg_id})
 

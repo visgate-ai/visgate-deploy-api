@@ -29,6 +29,7 @@ from src.services.r2_manifest import (
     fetch_cached_model_ids,
     model_s3_url,
     split_s3_url,
+    model_cached_in_bucket,
 )
 from src.services.runpod import create_serverless_template
 from src.services.secret_cache import get_secrets
@@ -168,6 +169,8 @@ def _now_iso() -> str:
 def _as_run_url(endpoint_url: str | None) -> str | None:
     if not endpoint_url:
         return None
+    if endpoint_url.startswith("vast-ep://"):
+        return endpoint_url
     return endpoint_url if endpoint_url.endswith("/run") else f"{endpoint_url}/run"
 
 
@@ -291,6 +294,29 @@ async def orchestrate_deployment(
         except ValueError:
             return None
 
+    provider_name: str | None = None
+    provider = None
+    provider_api_key: str | None = None
+    created_endpoint_id: str | None = None
+
+    async def cleanup_vast_endpoint_if_needed(reason: str) -> None:
+        nonlocal created_endpoint_id
+        if provider_name != "vast" or not created_endpoint_id or provider is None or not provider_api_key:
+            return
+        endpoint_to_delete = created_endpoint_id
+        try:
+            await provider.delete_endpoint(endpoint_to_delete, provider_api_key)
+            log_step("INFO", "Cleaned up Vast endpoint after failure", endpoint_id=endpoint_to_delete, reason=reason)
+            created_endpoint_id = None
+        except Exception as cleanup_exc:
+            log_step(
+                "WARNING",
+                "Failed to clean up Vast endpoint after failure",
+                endpoint_id=endpoint_to_delete,
+                reason=reason,
+                cleanup_error=str(cleanup_exc),
+            )
+
     try:
         doc = get_deployment(client, coll, deployment_id)
         if not doc:
@@ -345,17 +371,31 @@ async def orchestrate_deployment(
                 return await validate_model(runtime_hf_model_id, token=hf_token)
 
         async def _check_r2_cache():
-            if not (settings.r2_access_key_id_rw and settings.r2_endpoint_url and _uses_shared_model_cache(worker_target["profile"])):
+            cache_key_id = settings.r2_access_key_id_rw or settings.r2_access_key_id_ro
+            cache_secret_key = settings.r2_secret_access_key_rw or settings.r2_secret_access_key_ro
+            if not (cache_key_id and cache_secret_key and settings.r2_endpoint_url and _uses_shared_model_cache(worker_target["profile"])):
                 return None, False
             model_bucket, _ = split_s3_url(settings.r2_model_base_url)
             per_model_url = model_s3_url(settings.r2_model_base_url, runtime_hf_model_id)
             cached_ids = fetch_cached_model_ids(
                 settings.r2_endpoint_url,
-                settings.r2_access_key_id_rw,
-                settings.r2_secret_access_key_rw,
+                cache_key_id,
+                cache_secret_key,
                 bucket=model_bucket,
             )
             if runtime_hf_model_id in cached_ids:
+                return per_model_url, False
+            if model_cached_in_bucket(
+                settings.r2_endpoint_url,
+                cache_key_id,
+                cache_secret_key,
+                per_model_url,
+            ):
+                log_step(
+                    "INFO",
+                    "R2 manifest miss but model prefix exists — using direct cache path",
+                    s3_url=per_model_url,
+                )
                 return per_model_url, False
             return None, True  # cache miss, trigger task
 
@@ -489,15 +529,16 @@ async def orchestrate_deployment(
 
         if provider_name == "vast":
             # ── Vast.ai Serverless flow: template → endpoint → workergroup ──
-            first_gpu_id = target_ids[0]
+            vast_cold_workers = max(1, _workers_min(settings, worker_target["profile"], settings.runpod_workers_max))
             try:
                 endpoint_data = await provider.create_endpoint(
                     name=endpoint_name,
-                    gpu_id=first_gpu_id,
+                    gpu_id=str(vram_gb),
                     image=worker_target["image"],
                     env=env,
                     api_key=provider_api_key,
-                    cold_workers=0,
+                    gpu_ids=target_ids,
+                    cold_workers=vast_cold_workers,
                     max_workers=settings.runpod_workers_max,
                 )
             except Exception as e:
@@ -596,6 +637,7 @@ async def orchestrate_deployment(
 
         endpoint_id = endpoint_data["id"]
         endpoint_url = endpoint_data["url"]
+        created_endpoint_id = str(endpoint_id)
 
         # 4. Finalize
         finalize_fields: dict[str, Any] = {
@@ -643,13 +685,17 @@ async def orchestrate_deployment(
         # Vast.ai: probe instance HTTP server /health endpoint.
         monitor_timeout_seconds = 600   # 10 min — covers GPU cold-start + model download
         monitor_interval_seconds = 5    # Poll every 5s (less aggressive, still responsive)
+        vast_no_worker_timeout_seconds = 90
         started_at = asyncio.get_running_loop().time()
+        no_workers_since: float | None = None
         while True:
             latest = get_deployment(client, coll, deployment_id)
             if not latest:
                 log_step("WARNING", "Deployment doc missing during readiness monitoring")
                 return
             if latest.status in {"ready", "failed", "webhook_failed", "deleted"}:
+                if latest.status in {"failed", "webhook_failed"}:
+                    await cleanup_vast_endpoint_if_needed(f"terminal_status_{latest.status}")
                 return
 
             elapsed = asyncio.get_running_loop().time() - started_at
@@ -665,11 +711,39 @@ async def orchestrate_deployment(
                     deployment_id,
                     {"status": "failed", "error": f"Worker did not become ready within {monitor_timeout_seconds}s"},
                 )
+                await cleanup_vast_endpoint_if_needed("readiness_timeout")
                 return
 
             if provider_name == "vast":
                 health = await provider.check_endpoint_health(endpoint_id, provider_api_key)
                 running_count = health.get("running_count", 0)
+                status_name = health.get("status")
+                if status_name == "no_workers":
+                    now = asyncio.get_running_loop().time()
+                    if no_workers_since is None:
+                        no_workers_since = now
+                        log_step(
+                            "INFO",
+                            "Vast endpoint has no workers yet; waiting for initial worker provisioning",
+                            endpoint_id=endpoint_id,
+                            timeout_seconds=vast_no_worker_timeout_seconds,
+                        )
+                    elif (now - no_workers_since) > vast_no_worker_timeout_seconds:
+                        message = (
+                            f"Vast endpoint did not provision a worker within "
+                            f"{vast_no_worker_timeout_seconds}s"
+                        )
+                        log_step("ERROR", message, endpoint_id=endpoint_id)
+                        update_deployment(
+                            client,
+                            coll,
+                            deployment_id,
+                            {"status": "failed", "error": message},
+                        )
+                        await cleanup_vast_endpoint_if_needed("no_workers_timeout")
+                        return
+                else:
+                    no_workers_since = None
                 ready = running_count > 0
                 probe_error = health.get("error") if not ready else None
             elif _uses_health_probe_readiness(worker_target["profile"]):
@@ -689,6 +763,7 @@ async def orchestrate_deployment(
                 log_step("WARNING", "Readiness probe retry", error=probe_error)
             await asyncio.sleep(monitor_interval_seconds)
     except HuggingFaceModelNotFoundError as e:
+        await cleanup_vast_endpoint_if_needed("huggingface_model_not_found")
         update_deployment(
             client,
             coll,
@@ -697,6 +772,7 @@ async def orchestrate_deployment(
         )
         log_step("ERROR", e.message, error_type="HuggingFaceModelNotFoundError")
     except RunpodInsufficientGPUError as e:
+        await cleanup_vast_endpoint_if_needed("runpod_insufficient_gpu")
         update_deployment(
             client,
             coll,
@@ -705,6 +781,7 @@ async def orchestrate_deployment(
         )
         log_step("ERROR", e.message, error_type="RunpodInsufficientGPUError")
     except RunpodAPIError as e:
+        await cleanup_vast_endpoint_if_needed("runpod_api_error")
         update_deployment(
             client,
             coll,
@@ -713,6 +790,7 @@ async def orchestrate_deployment(
         )
         log_step("ERROR", e.message, error_type="RunpodAPIError")
     except VastAPIError as e:
+        await cleanup_vast_endpoint_if_needed("vast_api_error")
         update_deployment(
             client,
             coll,
@@ -721,6 +799,7 @@ async def orchestrate_deployment(
         )
         log_step("ERROR", e.message, error_type="VastAPIError")
     except Exception as e:
+        await cleanup_vast_endpoint_if_needed("unexpected_exception")
         update_deployment(
             client,
             coll,

@@ -1,6 +1,7 @@
 """Unit/contract tests for deployment API (mocked Firestore)."""
 
 import os
+from unittest.mock import MagicMock
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -216,6 +217,39 @@ def test_hf_token_is_required_for_deployments(
     resp = client.post("/v1/deployments", json=payload, headers=auth_headers)
     assert resp.status_code == 400
     assert "hf_token is required" in resp.json()["message"]
+
+
+@patch("src.api.routes.deployments.get_provider")
+@patch("src.api.routes.deployments.get_deployment")
+def test_delete_deployment_uses_vast_api_key_for_vast_provider(
+    mock_get_deployment,
+    mock_get_provider,
+    client: TestClient,
+    auth_headers: dict,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from src.core.config import get_settings
+
+    get_settings.cache_clear()
+    monkeypatch.setenv("VAST_API_KEY", "vast_test_key")
+    get_settings.cache_clear()
+
+    doc = MagicMock()
+    doc.user_hash = None
+    doc.provider = "vast"
+    doc.runpod_endpoint_id = "14201"
+    doc.runpod_dep_template_name = None
+    mock_get_deployment.return_value = doc
+
+    provider = MagicMock()
+    provider.delete_endpoint = AsyncMock(return_value=None)
+    mock_get_provider.return_value = provider
+
+    resp = client.delete("/v1/deployments/dep_vast_1", headers=auth_headers)
+
+    assert resp.status_code == 204
+    provider.delete_endpoint.assert_awaited_once_with("14201", "vast_test_key")
+    get_settings.cache_clear()
 
 
 @patch("src.api.routes.deployments.enqueue_orchestration_task", new_callable=AsyncMock)

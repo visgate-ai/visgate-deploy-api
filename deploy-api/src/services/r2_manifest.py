@@ -146,6 +146,44 @@ def fetch_cached_model_ids(
         return set()
 
 
+def model_cached_in_bucket(
+    endpoint_url: str,
+    access_key_id: str,
+    secret_access_key: str,
+    model_s3_path: str,
+) -> bool:
+    """Return True when a per-model R2 prefix appears populated.
+
+    This is a fallback for cases where manifest.json is stale or missing entries.
+    """
+    try:
+        from botocore.exceptions import BotoCoreError, ClientError  # type: ignore
+
+        bucket, key_prefix = split_s3_url(model_s3_path)
+        prefix = f"{key_prefix.rstrip('/')}/"
+        s3 = _create_s3_client(endpoint_url, access_key_id, secret_access_key)
+
+        # Prefer a strong signal for diffusers-style models.
+        try:
+            s3.head_object(Bucket=bucket, Key=f"{key_prefix.rstrip('/')}/model_index.json")
+            return True
+        except ClientError:
+            pass
+
+        # Fallback: any object under the model prefix means cache exists.
+        response = s3.list_objects_v2(Bucket=bucket, Prefix=prefix, MaxKeys=1)
+        return bool(response.get("KeyCount", 0) > 0)
+    except ImportError:
+        logger.warning("boto3 not installed; cannot probe per-model cache prefix")
+        return False
+    except (BotoCoreError, ClientError) as exc:  # type: ignore[name-defined]
+        logger.warning("R2 model prefix probe failed: %s", exc)
+        return False
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Unexpected error probing R2 model prefix: %s", exc)
+        return False
+
+
 def model_s3_url(base_url: str, model_id: str) -> str:
     """Return the per-model S3 URL for a given HuggingFace model ID.
 

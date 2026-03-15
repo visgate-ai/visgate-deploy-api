@@ -10,7 +10,7 @@ import httpx
 import pytest
 
 from src.core.errors import VastAPIError
-from src.services.vast import VastProvider, _JOB_ID_SEP
+from src.services.vast import VastProvider, _JOB_ID_SEP, _build_search_params
 
 
 @pytest.fixture
@@ -173,15 +173,22 @@ async def test_create_workergroup(provider: VastProvider) -> None:
         body = json.loads(request.content)
         assert body["endpoint_name"] == "my-ep"
         assert body["template_hash"] == "abc123"
-        assert body["gpu_ram"] == 24576
+        assert body["gpu_ram"] == 24
+        assert body["search_params"] == "verified=true rentable=true rented=false gpu_ram>=24"
         return _mock_response(200, resp)
 
     with patch.object(httpx.AsyncClient, "send", mock_send):
         result = await provider.create_workergroup(
-            "key", endpoint_name="my-ep", template_hash="abc123", gpu_ram=24576,
+            "key", endpoint_name="my-ep", template_hash="abc123", gpu_ram=24,
         )
 
     assert result["id"] == 789
+
+
+def test_build_search_params_includes_gpu_pool() -> None:
+    assert _build_search_params(24, ["NVIDIA GeForce RTX 3090", "NVIDIA RTX A5000"]) == (
+        "verified=true rentable=true rented=false gpu_ram>=24 gpu_name in [RTX_3090, RTX_A5000]"
+    )
 
 
 # ── create_endpoint (full flow) ──────────────────────────────────────────────
@@ -204,6 +211,9 @@ async def test_create_endpoint_success(provider: VastProvider) -> None:
             return _mock_response(200, endpoint_resp)
         if "/api/v0/workergroups/" in url:
             call_log.append("workergroup")
+            body = json.loads(request.content)
+            assert body["gpu_ram"] == 24
+            assert body["search_params"].endswith("gpu_name in [RTX_A5000, RTX_3090]")
             return _mock_response(200, wg_resp)
         return _mock_response(404, text="not found")
 
@@ -214,6 +224,7 @@ async def test_create_endpoint_success(provider: VastProvider) -> None:
             image="visgateai/inference-image:latest",
             env={"HF_MODEL_ID": "stabilityai/sd-turbo"},
             api_key="test-key",
+            gpu_ids=["NVIDIA RTX A5000", "NVIDIA GeForce RTX 3090"],
         )
 
     assert call_log == ["template", "endpoint", "workergroup"]
@@ -253,6 +264,41 @@ async def test_create_endpoint_no_endpoint_id(provider: VastProvider) -> None:
             await provider.create_endpoint(
                 name="ep1", gpu_id="24", image="img:latest", env={}, api_key="key",
             )
+
+
+@pytest.mark.asyncio
+async def test_create_endpoint_workergroup_failure_cleans_up_endpoint(provider: VastProvider) -> None:
+    template_resp = {"success": True, "template": {"id": 1, "hash_id": "h", "name": "n"}}
+    endpoint_resp = {"success": True, "result": 42}
+
+    call_log: list[tuple[str, str]] = []
+
+    async def mock_send(self, request, **kwargs):
+        url = str(request.url)
+        if "/api/v0/template/" in url:
+            call_log.append(("template", request.method))
+            return _mock_response(200, template_resp)
+        if "/api/v0/endptjobs/" in url and request.method == "POST":
+            call_log.append(("endpoint_create", request.method))
+            return _mock_response(200, endpoint_resp)
+        if "/api/v0/workergroups/" in url:
+            call_log.append(("workergroup", request.method))
+            return _mock_response(500, text="wg failed")
+        if "/api/v0/endptjobs/42/" in url and request.method == "DELETE":
+            call_log.append(("endpoint_delete", request.method))
+            return _mock_response(200, {"success": True})
+        return _mock_response(404, text="not found")
+
+    with patch.object(httpx.AsyncClient, "send", mock_send):
+        with pytest.raises(VastAPIError, match="500"):
+            await provider.create_endpoint(
+                name="ep1", gpu_id="24", image="img:latest", env={}, api_key="key",
+            )
+
+    assert call_log[0] == ("template", "POST")
+    assert call_log[1] == ("endpoint_create", "POST")
+    assert ("workergroup", "POST") in call_log
+    assert call_log[-1] == ("endpoint_delete", "DELETE")
 
 
 # ── delete_endpoint ──────────────────────────────────────────────────────────
