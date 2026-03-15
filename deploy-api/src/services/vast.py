@@ -1,21 +1,19 @@
-"""Vast.ai Serverless Provider Implementation.
+"""Vast.ai On-Demand Instance Provider Implementation.
 
-Vast.ai Serverless provides managed inference endpoints with auto-scaling
-worker groups — similar to RunPod's serverless product.
+Vast.ai on-demand instances provide direct GPU access with public IP:port
+connectivity — no PyWorker or serverless routing required.
 
 Flow:
-  1. create_endpoint  → create Vast template → create serverless endpoint →
-                        create workergroup (links template + GPU requirements)
-  2. submit_job       → POST /route/ (run.vast.ai) to get a live worker URL →
-                        POST /run on that worker → return composite job ID
-  3. get_job_status   → parse worker URL from composite job ID →
-                        GET /status/<id> on that worker
-  4. delete_endpoint  → DELETE /api/v0/endptjobs/<id>/
-  5. health check     → POST /get_endpoint_workers/ (run.vast.ai)
+  1. create_endpoint  → search GPU offers → PUT /api/v0/asks/<offer_id>/ →
+                        instance_id (contract)
+  2. health check     → GET /api/v0/instances/<id>/ → check actual_status →
+                        extract public_ipaddr:port → probe /health directly
+  3. submit_job       → POST /run on worker (direct HTTP via instance IP:port)
+  4. get_job_status   → GET /status/<id> on worker
+  5. delete_endpoint  → DELETE /api/v0/instances/<id>/
 
 Auth: Bearer token in Authorization header.
 Management API: https://console.vast.ai
-Routing API:    https://run.vast.ai
 """
 
 from __future__ import annotations
@@ -37,7 +35,6 @@ from src.services.base_provider import (
 from src.services.provider_factory import register_provider
 
 _CONSOLE_BASE = "https://console.vast.ai"
-_ROUTE_BASE = "https://run.vast.ai"
 
 # Port the HTTP inference server listens on inside the container.
 _WORKER_HTTP_PORT = 8000
@@ -71,15 +68,10 @@ def _build_search_params(gpu_ram: int, gpu_names: list[str] | None = None) -> st
 
 
 class VastProvider(BaseInferenceProvider):
-    """Vast.ai inference provider using the Serverless API."""
+    """Vast.ai inference provider using on-demand GPU instances."""
 
-    def __init__(
-        self,
-        console_base: str = _CONSOLE_BASE,
-        route_base: str = _ROUTE_BASE,
-    ) -> None:
+    def __init__(self, console_base: str = _CONSOLE_BASE) -> None:
         self.console_base = console_base.rstrip("/")
-        self.route_base = route_base.rstrip("/")
 
     # ── low-level HTTP helper ────────────────────────────────────────────
 
@@ -144,133 +136,74 @@ class VastProvider(BaseInferenceProvider):
 
         raise last_exc or VastAPIError(message="Vast.ai request failed after retries")
 
-    # ── Serverless management helpers ────────────────────────────────────
+    # ── On-demand instance helpers ───────────────────────────────────────
 
-    async def create_template(
+    async def search_offers(
         self,
         api_key: str,
         *,
-        name: str,
-        image: str,
-        env_str: str = "",
-        runtype: str = "args",
-    ) -> dict[str, Any]:
-        """POST /api/v0/template/ → {success, template: {id, hash_id, name}}"""
-        body: dict[str, Any] = {
-            "name": name,
-            "image": image,
-            "runtype": runtype,
-        }
-        if env_str:
-            body["env"] = env_str
-        return await self._request("POST", "/api/v0/template/", api_key, json_payload=body)
-
-    async def create_serverless_endpoint(
-        self,
-        api_key: str,
-        *,
-        endpoint_name: str,
-        cold_workers: int = 0,
-        max_workers: int = 1,
-        min_load: int = 0,
-        target_util: int = 80,
-    ) -> dict[str, Any]:
-        """POST /api/v0/endptjobs/ → {success, result: endpoint_id}"""
-        body = {
-            "endpoint_name": endpoint_name,
-            "cold_workers": cold_workers,
-            "max_workers": max_workers,
-            "min_load": min_load,
-            "target_util": target_util,
-        }
-        return await self._request("POST", "/api/v0/endptjobs/", api_key, json_payload=body)
-
-    async def create_workergroup(
-        self,
-        api_key: str,
-        *,
-        endpoint_name: str,
-        template_hash: str,
         gpu_ram: int = 0,
-        cold_workers: int = 0,
-        max_workers: int = 1,
         gpu_names: list[str] | None = None,
-        search_params: str | None = None,
+        order: str = "dph_total",
+        limit: int = 10,
+    ) -> list[dict[str, Any]]:
+        """Search marketplace for available GPU offers."""
+        search_params = _build_search_params(gpu_ram, gpu_names)
+        path = f"/api/v0/search/offers/?q={search_params}&order={order}&limit={limit}"
+        data = await self._request("GET", path, api_key)
+        offers = data if isinstance(data, list) else data.get("offers", [])
+        return offers
+
+    async def create_instance(
+        self,
+        api_key: str,
+        offer_id: int,
+        *,
+        image: str,
+        env: dict[str, str],
+        disk: int = 20,
+        label: str = "",
     ) -> dict[str, Any]:
-        """POST /api/v0/workergroups/ → {success, id}"""
-        # search_params is required by Vast API and must be a string
-        if not search_params:
-            search_params = _build_search_params(gpu_ram, gpu_names)
+        """PUT /api/v0/asks/<offer_id>/ → {success, new_contract}."""
+        # Build env dict in Vast format: env vars + port mappings
+        vast_env: dict[str, str] = {}
+        for k, v in env.items():
+            vast_env[k] = v
+        vast_env[f"-p {_WORKER_HTTP_PORT}:{_WORKER_HTTP_PORT}"] = "1"
 
         body: dict[str, Any] = {
-            "endpoint_name": endpoint_name,
-            "template_hash": template_hash,
-            "search_params": search_params,
-            "cold_workers": cold_workers,
-            "max_workers": max_workers,
+            "image": image,
+            "disk": disk,
+            "runtype": "args",
+            "env": vast_env,
         }
-        if gpu_ram > 0:
-            body["gpu_ram"] = gpu_ram
-        return await self._request("POST", "/api/v0/workergroups/", api_key, json_payload=body)
+        if label:
+            body["label"] = label
+        return await self._request("PUT", f"/api/v0/asks/{offer_id}/", api_key, json_payload=body)
 
-    async def route_request(
-        self,
-        api_key: str,
-        endpoint_name: str,
-        cost: int = 100,
-    ) -> dict[str, Any]:
-        """POST /route/ on run.vast.ai → {url, reqnum, signature} or {status: "Stopped"}"""
-        body = {"endpoint": endpoint_name, "cost": cost}
-        return await self._request(
-            "POST", "/route/", api_key,
-            base=self.route_base,
-            json_payload=body,
-        )
+    async def get_instance(self, api_key: str, instance_id: int | str) -> dict[str, Any]:
+        """GET /api/v0/instances/<id>/ → instance details."""
+        return await self._request("GET", f"/api/v0/instances/{instance_id}/", api_key)
 
-    async def get_endpoint_workers(
-        self,
-        api_key: str,
-        endpoint_id: int | str,
-    ) -> list[dict[str, Any]] | dict[str, Any]:
-        """POST /get_endpoint_workers/ on run.vast.ai → list or {workers: [...]}"""
-        body = {"id": int(endpoint_id)}
-        return await self._request(
-            "POST", "/get_endpoint_workers/", api_key,
-            base=self.route_base,
-            json_payload=body,
-        )
+    async def destroy_instance(self, api_key: str, instance_id: int | str) -> Any:
+        """DELETE /api/v0/instances/<id>/ → destroy on-demand instance."""
+        return await self._request("DELETE", f"/api/v0/instances/{instance_id}/", api_key)
 
     # ── URL helpers ──────────────────────────────────────────────────────
 
     @staticmethod
-    def build_endpoint_url(endpoint_id: str, endpoint_name: str = "") -> str:
-        """Encode endpoint ID (and optionally name) as a virtual URL.
-
-        Format: ``vast-ep://<id>/<name>`` — name is needed by the /route/ API.
-        """
-        if endpoint_name:
-            return f"vast-ep://{endpoint_id}/{endpoint_name}"
-        return f"vast-ep://{endpoint_id}"
+    def build_endpoint_url(instance_id: str) -> str:
+        """Encode instance ID as a virtual URL for storage."""
+        return f"vast-inst://{instance_id}"
 
     @staticmethod
     def parse_endpoint_id(endpoint_url: str) -> str:
-        """Extract numeric endpoint ID from the virtual URL."""
-        prefix = "vast-ep://"
-        if endpoint_url.startswith(prefix):
-            rest = endpoint_url[len(prefix):]
-            return rest.split("/", 1)[0]
+        """Extract instance ID from the virtual URL."""
+        for prefix in ("vast-inst://", "vast-ep://"):
+            if endpoint_url.startswith(prefix):
+                rest = endpoint_url[len(prefix):]
+                return rest.split("/", 1)[0]
         return endpoint_url
-
-    @staticmethod
-    def parse_endpoint_name(endpoint_url: str) -> str:
-        """Extract endpoint name from the virtual URL (empty if not encoded)."""
-        prefix = "vast-ep://"
-        if endpoint_url.startswith(prefix):
-            rest = endpoint_url[len(prefix):]
-            parts = rest.split("/", 1)
-            if len(parts) == 2:
-                return parts[1]
-        return ""
 
     @staticmethod
     def encode_job_id(worker_url: str, actual_job_id: str) -> str:
@@ -285,14 +218,19 @@ class VastProvider(BaseInferenceProvider):
         return "", composite_id
 
     @staticmethod
-    def _env_dict_to_flag_str(env: dict[str, str]) -> str:
-        """Convert env dict to Docker-flag format for Vast template API.
-
-        Example: ``{A: 1, B: 2}`` → ``-e A=1 -e B=2 -p 8000:8000``
-        """
-        parts = [f"-e {k}={v}" for k, v in env.items()]
-        parts.append(f"-p {_WORKER_HTTP_PORT}:{_WORKER_HTTP_PORT}")
-        return " ".join(parts)
+    def extract_worker_url(instance: dict[str, Any]) -> str | None:
+        """Extract the direct HTTP URL from a Vast instance dict."""
+        ip = instance.get("public_ipaddr")
+        if not ip:
+            return None
+        ports = instance.get("ports", {})
+        tcp_key = f"{_WORKER_HTTP_PORT}/tcp"
+        tcp_mapping = ports.get(tcp_key, [])
+        if isinstance(tcp_mapping, list) and tcp_mapping:
+            host_port = tcp_mapping[0].get("HostPort")
+            if host_port:
+                return f"http://{ip}:{host_port}"
+        return None
 
     # ── BaseInferenceProvider implementation ─────────────────────────────
 
@@ -305,7 +243,7 @@ class VastProvider(BaseInferenceProvider):
         api_key: str,
         **kwargs: Any,
     ) -> ProviderEndpoint:
-        """Create a Vast.ai serverless endpoint with template and workergroup.
+        """Create a Vast.ai on-demand GPU instance.
 
         ``gpu_id`` is interpreted as VRAM in GB (numeric string) or GPU name.
         """
@@ -317,121 +255,99 @@ class VastProvider(BaseInferenceProvider):
 
         # Inject HTTP mode so the worker starts its HTTP server
         env = {**env, "WORKER_MODE": "http", "HTTP_PORT": str(_WORKER_HTTP_PORT)}
-        env_str = self._env_dict_to_flag_str(env)
 
-        cold_workers = max(1, int(kwargs.get("cold_workers") or 1))
-        max_workers = max(1, int(kwargs.get("max_workers") or 1))
         candidate_gpu_ids = kwargs.get("gpu_ids")
         candidate_gpu_names = candidate_gpu_ids if isinstance(candidate_gpu_ids, list) else []
         if not candidate_gpu_names and gpu_id and not min_gpu_ram_gb:
             candidate_gpu_names = [gpu_id]
-        endpoint_name = name
 
         structured_log(
             "INFO",
-            "Vast.ai creating serverless endpoint",
+            "Vast.ai searching for GPU offers",
             metadata={
-                "endpoint_name": endpoint_name,
+                "name": name,
                 "image": image,
                 "gpu_ram_gb": min_gpu_ram_gb,
                 "candidate_gpu_names": candidate_gpu_names,
             },
         )
 
-        # 1. Create template
-        template_resp = await self.create_template(
+        # Search for matching GPU offers
+        offers = await self.search_offers(
             api_key,
-            name=f"visgate-{endpoint_name}",
+            gpu_ram=min_gpu_ram_gb * 1024 if min_gpu_ram_gb else 0,
+            gpu_names=candidate_gpu_names,
+        )
+        if not offers:
+            raise VastAPIError("No matching GPU offers found on Vast.ai marketplace")
+
+        # Pick cheapest offer
+        offer = min(offers, key=lambda o: o.get("dph_total", 999))
+        offer_id = offer["id"]
+        offer_gpu = offer.get("gpu_name", "unknown")
+        offer_price = offer.get("dph_total")
+
+        structured_log(
+            "INFO",
+            "Vast.ai selected offer",
+            metadata={
+                "offer_id": offer_id,
+                "gpu": offer_gpu,
+                "price_per_hour": offer_price,
+                "total_offers": len(offers),
+            },
+        )
+
+        # Create on-demand instance
+        inst_resp = await self.create_instance(
+            api_key,
+            offer_id,
             image=image,
-            env_str=env_str,
+            env=env,
+            label=f"visgate-{name}",
         )
-        template = template_resp.get("template", {})
-        template_hash = template.get("hash_id", "")
-        template_id = template.get("id")
-        if not template_hash:
+        instance_id = inst_resp.get("new_contract")
+        if not instance_id:
             raise VastAPIError(
-                "Template creation returned no hash_id",
-                details={"response": template_resp},
+                "Instance creation returned no contract ID",
+                details={"response": inst_resp},
             )
-        structured_log("INFO", "Vast.ai template created", metadata={"template_id": template_id, "hash": template_hash})
 
-        # 2. Create serverless endpoint
-        ep_resp = await self.create_serverless_endpoint(
-            api_key,
-            endpoint_name=endpoint_name,
-            cold_workers=cold_workers,
-            max_workers=max_workers,
+        structured_log(
+            "INFO",
+            "Vast.ai instance created",
+            metadata={"instance_id": instance_id, "offer_id": offer_id, "gpu": offer_gpu},
         )
-        ep_id = ep_resp.get("result")
-        if not ep_id:
-            raise VastAPIError(
-                "Endpoint creation returned no ID",
-                details={"response": ep_resp},
-            )
-        structured_log("INFO", "Vast.ai serverless endpoint created", metadata={"endpoint_id": ep_id})
-
-        # 3. Create workergroup connecting template → endpoint
-        try:
-            wg_resp = await self.create_workergroup(
-                api_key,
-                endpoint_name=endpoint_name,
-                template_hash=template_hash,
-                gpu_ram=min_gpu_ram_gb if min_gpu_ram_gb else 0,
-                cold_workers=cold_workers,
-                max_workers=max_workers,
-                gpu_names=candidate_gpu_names,
-            )
-        except Exception:
-            try:
-                await self.delete_endpoint(str(ep_id), api_key)
-                structured_log(
-                    "WARNING",
-                    "Vast.ai endpoint cleaned up after workergroup creation failure",
-                    metadata={"endpoint_id": ep_id, "endpoint_name": endpoint_name},
-                )
-            except Exception as cleanup_exc:
-                structured_log(
-                    "WARNING",
-                    "Vast.ai endpoint cleanup failed after workergroup creation failure",
-                    metadata={
-                        "endpoint_id": ep_id,
-                        "endpoint_name": endpoint_name,
-                        "cleanup_error": str(cleanup_exc),
-                    },
-                )
-            raise
-        wg_id = wg_resp.get("id")
-        structured_log("INFO", "Vast.ai workergroup created", metadata={"workergroup_id": wg_id})
 
         return {
-            "id": str(ep_id),
-            "url": self.build_endpoint_url(str(ep_id), endpoint_name),
+            "id": str(instance_id),
+            "url": self.build_endpoint_url(str(instance_id)),
             "raw_response": {
-                "endpoint_id": ep_id,
-                "endpoint_name": endpoint_name,
-                "template_id": template_id,
-                "template_hash": template_hash,
-                "workergroup_id": wg_id,
+                "instance_id": instance_id,
+                "offer_id": offer_id,
+                "gpu_name": offer_gpu,
+                "price_per_hour": offer_price,
             },
         }
 
     async def delete_endpoint(self, endpoint_id: str, api_key: str) -> None:
-        """DELETE /api/v0/endptjobs/<id>/ — also deletes associated workergroups."""
-        await self._request("DELETE", f"/api/v0/endptjobs/{endpoint_id}/", api_key)
+        """Destroy the on-demand instance."""
+        await self.destroy_instance(api_key, endpoint_id)
 
     async def list_endpoints(self, api_key: str) -> list[ProviderEndpointSummary]:
-        resp = await self._request("GET", "/api/v0/endptjobs/", api_key)
-        results = resp.get("results", []) if isinstance(resp, dict) else []
+        resp = await self._request("GET", "/api/v0/instances/", api_key)
+        instances = resp if isinstance(resp, list) else resp.get("instances", [])
         summaries: list[ProviderEndpointSummary] = []
-        for ep in results:
-            ep_id = str(ep.get("id", ""))
-            ep_name = ep.get("endpoint_name", "")
+        for inst in instances:
+            inst_id = str(inst.get("id", ""))
+            label = inst.get("label", "")
+            status = inst.get("actual_status", "unknown")
             summaries.append({
-                "id": ep_id,
-                "name": ep_name or f"vast-{ep_id}",
-                "status": ep.get("endpoint_state", "unknown"),
-                "url": self.build_endpoint_url(ep_id, ep_name) if ep_id else None,
-                "raw_response": ep,
+                "id": inst_id,
+                "name": label or f"vast-{inst_id}",
+                "status": status,
+                "url": self.build_endpoint_url(inst_id) if inst_id else None,
+                "raw_response": inst,
             })
         return summaries
 
@@ -452,7 +368,7 @@ class VastProvider(BaseInferenceProvider):
         return list(seen.values())
 
     def get_run_url(self, endpoint_id: str) -> str:
-        return f"{self.route_base}/route/"
+        return self.build_endpoint_url(endpoint_id)
 
     async def submit_job(
         self,
@@ -464,35 +380,27 @@ class VastProvider(BaseInferenceProvider):
         policy: dict[str, Any] | None = None,
         s3_config: dict[str, Any] | None = None,
     ) -> ProviderJobAccepted:
-        """Route to a live worker then POST /run on it.
-
-        The worker URL is encoded in the returned job ID so that
-        ``get_job_status`` can reach the correct worker later.
-        """
-        endpoint_id = self.parse_endpoint_id(endpoint_url)
-        # /route/ API needs the endpoint name, not the numeric ID
-        endpoint_name = self.parse_endpoint_name(endpoint_url) or endpoint_id
-
-        # Ask Vast router for a live worker
-        route_resp = await self.route_request(api_key, endpoint_name)
-        if isinstance(route_resp, dict) and route_resp.get("status") == "Stopped":
-            raise VastAPIError(
-                "No workers available (endpoint stopped)",
-                details={"endpoint": endpoint_id},
-            )
-        worker_url = route_resp.get("url") if isinstance(route_resp, dict) else None
-        if not worker_url:
-            raise VastAPIError(
-                "Route returned no worker URL",
-                details={"endpoint": endpoint_id, "response": route_resp},
-            )
+        """Submit a job directly to the worker's HTTP server."""
+        # Resolve worker URL
+        if endpoint_url.startswith("http://") or endpoint_url.startswith("https://"):
+            worker_url = endpoint_url.rstrip("/")
+        else:
+            # Virtual URL — look up instance to get IP:port
+            instance_id = self.parse_endpoint_id(endpoint_url)
+            instance = await self.get_instance(api_key, instance_id)
+            worker_url = self.extract_worker_url(instance)
+            if not worker_url:
+                raise VastAPIError(
+                    "Instance has no public IP:port yet",
+                    details={"instance_id": instance_id, "status": instance.get("actual_status")},
+                )
 
         # Build job payload
         payload: dict[str, Any] = {"input": dict(job_input)}
         if s3_config:
             payload["input"]["s3Config"] = s3_config
 
-        run_url = f"{worker_url.rstrip('/')}/run"
+        run_url = f"{worker_url}/run"
         async with httpx.AsyncClient(timeout=600.0) as client:
             resp = await client.post(
                 run_url,
@@ -548,12 +456,7 @@ class VastProvider(BaseInferenceProvider):
         return await self.get_job_status(endpoint_url, job_id, api_key)
 
     async def get_endpoint_health(self, endpoint_url: str, api_key: str) -> dict[str, Any]:
-        """Check endpoint health via the worker-status API on run.vast.ai.
-
-        ``endpoint_url`` is the stored virtual URL (``vast-ep://<id>``).
-        We parse the endpoint ID and look up workers through the router.
-        """
-        # If this is a direct HTTP URL (e.g. from a worker), probe /health
+        """Probe the instance's /health endpoint directly."""
         if endpoint_url.startswith(("http://", "https://")):
             try:
                 async with httpx.AsyncClient(timeout=10.0) as client:
@@ -563,149 +466,84 @@ class VastProvider(BaseInferenceProvider):
                 return resp.json()
             except Exception as exc:
                 return {"status": "unreachable", "error": str(exc)}
+        return {"status": "unknown", "note": "use check_endpoint_health with instance_id"}
 
-        # For virtual endpoint URL, we cannot probe directly — caller should
-        # use check_endpoint_health(endpoint_id, ...) instead.
-        return {"status": "unknown", "note": "use check_endpoint_health with endpoint_id"}
-
-    async def check_endpoint_health(self, endpoint_id: str, api_key: str, *, endpoint_name: str = "") -> dict[str, Any]:
-        """Query Vast.ai for the live workers of a serverless endpoint."""
+    async def check_endpoint_health(self, endpoint_id: str, api_key: str, **kwargs: Any) -> dict[str, Any]:
+        """Check instance status and probe the worker's /health endpoint directly."""
         try:
-            data = await self.get_endpoint_workers(api_key, endpoint_id)
+            instance = await self.get_instance(api_key, endpoint_id)
         except VastAPIError as exc:
             return {"status": "error", "error": str(exc), "workers": []}
 
-        if isinstance(data, str):
-            return {"status": "error", "error": data, "workers": []}
+        if isinstance(instance, str):
+            return {"status": "error", "error": instance, "workers": []}
 
-        # Vast API may return {"error_msg": "..."} on auth or lookup failures
-        if isinstance(data, dict) and "error_msg" in data:
-            return {"status": "error", "error": data["error_msg"], "workers": []}
+        if isinstance(instance, dict) and "error_msg" in instance:
+            return {"status": "error", "error": instance["error_msg"], "workers": []}
 
-        # Vast.ai may return a list directly or a dict with a "workers" key
-        if isinstance(data, list):
-            workers = data
-        else:
-            workers = data.get("workers", [])
-        # Vast.ai worker statuses: "creating", "loading", "ready", "idle", "stopped", "error"
-        _READY_STATUSES = {"ready", "idle"}
-        ready_workers = [w for w in workers if isinstance(w, dict) and w.get("status") in _READY_STATUSES]
+        vast_status = instance.get("actual_status", "unknown")
+        worker_url = self.extract_worker_url(instance)
 
-        # Direct health probe: Vast PyWorker-based readiness may not apply to custom images.
-        # If workers exist but none are Vast-ready, try probing the worker's HTTP /health directly.
-        if not ready_workers and workers:
-            probe_url = await self._find_probe_url(workers, endpoint_id, api_key, endpoint_name=endpoint_name)
-            if probe_url:
-                try:
-                    async with httpx.AsyncClient(timeout=8.0) as client:
-                        resp = await client.get(f"{probe_url}/health")
-                    if resp.status_code == 200:
-                        body = resp.json()
-                        w_ready = body.get("workers", {}).get("ready", 0)
-                        if w_ready > 0:
-                            structured_log(
-                                "INFO",
-                                "Direct health probe: worker model ready (bypassing Vast status)",
-                                metadata={"endpoint_id": endpoint_id, "probe_url": probe_url},
-                            )
-                            return {
-                                "status": "ready",
-                                "workers": workers,
-                                "running_count": 1,
-                                "total_count": len(workers),
-                                "direct_probe_url": probe_url,
-                            }
-                        else:
-                            structured_log(
-                                "DEBUG",
-                                "Direct health probe: model not ready yet",
-                                metadata={"endpoint_id": endpoint_id, "probe_url": probe_url, "body": body},
-                            )
-                except Exception as probe_exc:
-                    structured_log(
-                        "DEBUG",
-                        "Direct health probe failed",
-                        metadata={"endpoint_id": endpoint_id, "probe_url": probe_url, "error": str(probe_exc)},
-                    )
+        # Instance not running yet
+        if vast_status not in ("running",):
+            return {
+                "status": "loading" if vast_status in ("loading", "creating", "pulling") else vast_status,
+                "workers": [{"status": vast_status}],
+                "running_count": 0,
+                "total_count": 1,
+                "vast_status": vast_status,
+            }
 
-        return {
-            "status": "ready" if ready_workers else ("loading" if workers else "no_workers"),
-            "workers": workers,
-            "running_count": len(ready_workers),
-            "total_count": len(workers),
-        }
+        # Instance running but no public IP/port yet
+        if not worker_url:
+            return {
+                "status": "loading",
+                "workers": [{"status": "running_no_port"}],
+                "running_count": 0,
+                "total_count": 1,
+                "vast_status": vast_status,
+            }
 
-    @staticmethod
-    def _extract_worker_url(worker: dict[str, Any]) -> str | None:
-        """Try to extract a public HTTP URL from a Vast worker dict."""
-        # Vast may include public_ipaddr + ports mapping
-        ip = worker.get("public_ipaddr") or worker.get("ip_addr") or worker.get("addr")
-        if ip:
-            ports = worker.get("ports", {})
-            # Look for port 8000/tcp mapping (our inference server port)
-            tcp_8000 = ports.get("8000/tcp")
-            if isinstance(tcp_8000, list) and tcp_8000:
-                host_port = tcp_8000[0].get("HostPort")
-                if host_port:
-                    return f"http://{ip}:{host_port}"
-            # Try direct port 8000 if ports not mapped
-            if not ports:
-                return f"http://{ip}:8000"
-        return None
-
-    async def _find_probe_url(
-        self,
-        workers: list[dict[str, Any]],
-        endpoint_id: str,
-        api_key: str,
-        *,
-        endpoint_name: str = "",
-    ) -> str | None:
-        """Return a probe URL for the first loading worker.
-
-        Strategy:
-          1. Extract IP:port directly from the worker dict (cheapest).
-          2. Fall back to calling the /route/ API which may return a URL
-             even if the worker is still loading.
-        """
-        for w in workers:
-            if not isinstance(w, dict):
-                continue
-            w_status = w.get("status", "")
-            if w_status not in ("loading", "model_loading"):
-                continue
-            url = self._extract_worker_url(w)
-            if url:
-                return url
-
-        # Fallback: ask the Vast router for a worker URL
-        route_name = endpoint_name or endpoint_id
-        return await self._route_probe_url(route_name, api_key)
-
-    async def _route_probe_url(self, endpoint_name: str, api_key: str) -> str | None:
-        """Call /route/ and return the worker URL if available."""
+        # Instance running with IP:port — probe /health
         try:
-            route_resp = await self.route_request(api_key, endpoint_name)
-            if isinstance(route_resp, dict) and route_resp.get("url"):
-                url = route_resp["url"].rstrip("/")
-                structured_log(
-                    "INFO",
-                    "Route probe fallback: got worker URL",
-                    metadata={"endpoint_name": endpoint_name, "url": url},
-                )
-                return url
-            structured_log(
-                "DEBUG",
-                "Route probe fallback: no URL in response",
-                metadata={"endpoint_name": endpoint_name, "response": str(route_resp)[:200]},
-            )
+            async with httpx.AsyncClient(timeout=8.0) as client:
+                resp = await client.get(f"{worker_url}/health")
+            if resp.status_code == 200:
+                body = resp.json()
+                w_ready = body.get("workers", {}).get("ready", 0)
+                if w_ready > 0:
+                    structured_log(
+                        "INFO",
+                        "Vast instance model ready",
+                        metadata={"instance_id": endpoint_id, "worker_url": worker_url},
+                    )
+                    return {
+                        "status": "ready",
+                        "workers": [{"status": "ready"}],
+                        "running_count": 1,
+                        "total_count": 1,
+                        "worker_url": worker_url,
+                    }
+                # Server is up but model not loaded yet
+                return {
+                    "status": "loading",
+                    "workers": [{"status": "model_loading"}],
+                    "running_count": 0,
+                    "total_count": 1,
+                    "worker_url": worker_url,
+                    "health_body": body,
+                }
         except Exception as exc:
-            structured_log(
-                "DEBUG",
-                "Route probe fallback: request failed",
-                metadata={"endpoint_name": endpoint_name, "error": str(exc)[:200]},
-            )
-        return None
+            # Server not responding yet (container starting)
+            return {
+                "status": "loading",
+                "workers": [{"status": "server_starting"}],
+                "running_count": 0,
+                "total_count": 1,
+                "vast_status": vast_status,
+                "worker_url": worker_url,
+                "probe_error": str(exc),
+            }
 
 
 # Register the provider

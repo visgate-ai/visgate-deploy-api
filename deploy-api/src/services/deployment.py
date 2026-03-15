@@ -170,7 +170,7 @@ def _now_iso() -> str:
 def _as_run_url(endpoint_url: str | None) -> str | None:
     if not endpoint_url:
         return None
-    if endpoint_url.startswith("vast-ep://"):
+    if endpoint_url.startswith(("vast-ep://", "vast-inst://")):
         return endpoint_url
     return endpoint_url if endpoint_url.endswith("/run") else f"{endpoint_url}/run"
 
@@ -717,9 +717,7 @@ async def orchestrate_deployment(
                 return
 
             if provider_name == "vast":
-                # Pass both endpoint_id (for workers API) and endpoint_name (for /route/)
-                vast_endpoint_name = VastProvider.parse_endpoint_name(endpoint_url) or str(endpoint_id)
-                health = await provider.check_endpoint_health(endpoint_id, provider_api_key, endpoint_name=vast_endpoint_name)
+                health = await provider.check_endpoint_health(endpoint_id, provider_api_key)
                 running_count = health.get("running_count", 0)
                 total_count = health.get("total_count", 0)
                 status_name = health.get("status")
@@ -746,8 +744,8 @@ async def orchestrate_deployment(
                             if field in w0:
                                 val = w0[field]
                                 extra_meta[f"w0_{field}"] = str(val)[:200]
-                    if health.get("direct_probe_url"):
-                        extra_meta["direct_probe_url"] = health["direct_probe_url"]
+                    if health.get("worker_url"):
+                        extra_meta["worker_url"] = health["worker_url"]
                     log_step("INFO", f"Vast health check #{vast_hc_count}", **extra_meta)
                 if status_name == "error":
                     now = asyncio.get_running_loop().time()
@@ -801,7 +799,11 @@ async def orchestrate_deployment(
 
             if ready:
                 log_step("INFO", "Readiness probe succeeded; marking deployment ready")
-                final_url = endpoint_url if provider_name == "vast" else _as_run_url(endpoint_url)
+                if provider_name == "vast":
+                    # Use the direct worker HTTP URL if available from health check
+                    final_url = health.get("worker_url") or endpoint_url
+                else:
+                    final_url = _as_run_url(endpoint_url)
                 await mark_deployment_ready_and_notify(
                     deployment_id,
                     endpoint_url=final_url,
