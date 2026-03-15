@@ -2,6 +2,7 @@
 
 import base64
 import io
+import os
 from typing import Any, Optional
 
 import torch
@@ -18,18 +19,39 @@ class FluxPipeline(BasePipeline):
         except ImportError:
             from diffusers import AutoPipelineForText2Image as DiffusersFluxPipeline
 
-        # bfloat16 is native to Ampere/Ada; avoids float16 precision loss on flux
-        import torch
-        dtype = torch.bfloat16 if torch.cuda.is_available() else torch.float32
+        use_local_files = os.path.isdir(self.model_id)
+        has_model_index = os.path.exists(os.path.join(self.model_id, "model_index.json")) if use_local_files else False
+        has_config = os.path.exists(os.path.join(self.model_id, "config.json")) if use_local_files else False
+        if self.device.startswith("cuda") and torch.cuda.is_available() and torch.cuda.is_bf16_supported():
+            dtype = torch.bfloat16
+        elif self.device.startswith("cuda"):
+            dtype = torch.float16
+        else:
+            dtype = torch.float32
+
+        self._log(
+            "INFO",
+            (
+                f"load start source={self.model_id} source_kind={self._describe_source()} "
+                f"device={self.device} dtype={dtype} local_files_only={use_local_files} "
+                f"model_index={has_model_index} config={has_config}"
+            ),
+        )
+        self._log("INFO", "Calling Flux from_pretrained")
 
         self._pipeline = DiffusersFluxPipeline.from_pretrained(
             self.model_id,
             torch_dtype=dtype,
             use_safetensors=True,
             token=self.token,
+            local_files_only=use_local_files,
         )
+        self._log("INFO", "from_pretrained completed")
+        self._log("INFO", f"Moving pipeline to device {self.device}")
         self._pipeline.to(self.device)
+        self._log("INFO", "Pipeline moved to target device")
         # Memory optimizations (best-effort; ignore if unsupported)
+        enabled_optimizations: list[str] = []
         for method in (
             "enable_vae_slicing",
             "enable_vae_tiling",
@@ -37,13 +59,23 @@ class FluxPipeline(BasePipeline):
         ):
             try:
                 getattr(self._pipeline, method)()
+                enabled_optimizations.append(method)
             except Exception:
                 pass
         # xformers memory-efficient attention (faster if installed)
+        xformers_enabled = False
         try:
             self._pipeline.enable_xformers_memory_efficient_attention()
+            xformers_enabled = True
         except Exception:
             pass
+        self._log(
+            "INFO",
+            (
+                f"Load complete optimizations={enabled_optimizations or ['none']} "
+                f"xformers={xformers_enabled}"
+            ),
+        )
 
     def run(
         self,

@@ -7,9 +7,19 @@ on:
     paths:
       - 'inference/**'
   workflow_dispatch:
+    inputs:
+      targets:
+        description: Comma-separated worker targets to build
+        required: false
+        default: image,audio,video
+
+concurrency:
+  group: inference-build-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   build-and-push:
+    if: ${{ github.event_name != 'workflow_dispatch' || contains(format(',{0},', inputs.targets), format(',{0},', matrix.name)) }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false

@@ -49,6 +49,7 @@ _last_request_at: float = 0.0
 _failure_count: int = 0
 _task_kind: str = "text2img"
 _state_lock = threading.RLock()
+_runtime_device: str = DEVICE
 
 
 def _notify_orchestrator(
@@ -82,10 +83,36 @@ def _notify_orchestrator(
                 time.sleep(2 ** attempt)
 
 
-def _torch_dtype() -> torch.dtype:
-    if DEVICE.startswith("cuda") and torch.cuda.is_available() and torch.cuda.is_bf16_supported():
+def _resolve_runtime_device(preferred: str) -> str:
+    if not preferred.startswith("cuda"):
+        return preferred
+    if not torch.cuda.is_available():
+        log_tunnel("WARNING", "CUDA requested but no CUDA device is available; falling back to CPU")
+        return "cpu"
+
+    try:
+        capability = torch.cuda.get_device_capability(0)
+        arch = f"sm_{capability[0]}{capability[1]}"
+        supported_arches = {value for value in torch.cuda.get_arch_list() if value.startswith("sm_")}
+        if supported_arches and arch not in supported_arches:
+            gpu_name = torch.cuda.get_device_name(0)
+            log_tunnel(
+                "WARNING",
+                (
+                    f"GPU architecture {arch} ({gpu_name}) is unsupported by current PyTorch build "
+                    "— falling back to CPU"
+                ),
+            )
+            return "cpu"
+    except Exception as exc:
+        log_tunnel("WARNING", f"Could not verify CUDA architecture compatibility: {exc}")
+    return preferred
+
+
+def _torch_dtype(device: str) -> torch.dtype:
+    if device.startswith("cuda") and torch.cuda.is_available() and torch.cuda.is_bf16_supported():
         return torch.bfloat16
-    return torch.float16 if DEVICE.startswith("cuda") else torch.float32
+    return torch.float16 if device.startswith("cuda") else torch.float32
 
 
 def _runtime_video_model_id(model_id: str) -> str:
@@ -96,34 +123,37 @@ def _runtime_video_model_id(model_id: str) -> str:
     return aliases.get(model_id, model_id)
 
 
-def _load_speech_to_text_pipeline(model_source: str) -> Any:
+def _load_speech_to_text_pipeline(model_source: str, device: str) -> Any:
     from transformers import AutoModelForSpeechSeq2Seq, AutoProcessor, pipeline
+
+    use_local_files = os.path.isdir(model_source)
 
     model_kwargs: dict[str, Any] = {
         "token": HF_TOKEN,
-        "torch_dtype": _torch_dtype(),
+        "torch_dtype": _torch_dtype(device),
         "low_cpu_mem_usage": True,
+        "local_files_only": use_local_files,
     }
-    processor_kwargs: dict[str, Any] = {"token": HF_TOKEN}
+    processor_kwargs: dict[str, Any] = {"token": HF_TOKEN, "local_files_only": use_local_files}
 
     loaded_model = AutoModelForSpeechSeq2Seq.from_pretrained(model_source, **model_kwargs)
     processor = AutoProcessor.from_pretrained(model_source, **processor_kwargs)
 
-    if DEVICE.startswith("cuda"):
-        loaded_model.to(DEVICE)
+    if device.startswith("cuda"):
+        loaded_model.to(device)
 
     return pipeline(
         "automatic-speech-recognition",
         model=loaded_model,
         tokenizer=processor.tokenizer,
         feature_extractor=processor.feature_extractor,
-        torch_dtype=_torch_dtype(),
-        device=0 if DEVICE.startswith("cuda") else -1,
+        torch_dtype=_torch_dtype(device),
+        device=0 if device.startswith("cuda") else -1,
     )
 
 
 def _load_model_background() -> None:
-    global _pipeline, _load_error, _task_kind
+    global _pipeline, _load_error, _task_kind, _runtime_device
 
     try:
         with _state_lock:
@@ -132,8 +162,12 @@ def _load_model_background() -> None:
 
         with _state_lock:
             task_kind = _task_kind
+            _runtime_device = _resolve_runtime_device(DEVICE)
+            runtime_device = _runtime_device
+        log_tunnel("INFO", f"Using runtime device: {runtime_device}")
         effective_model_id = _runtime_video_model_id(HF_MODEL_ID) if task_kind == "text2video" else HF_MODEL_ID
         model_source, use_local, t_r2_sync_s, loaded_from_cache = resolve_model_source(effective_model_id)
+        log_tunnel("INFO", f"Loading model source: {model_source}")
 
         _notify_orchestrator("loading_model", f"Model loading started ({task_kind})")
         t0 = time.time()
@@ -141,16 +175,21 @@ def _load_model_background() -> None:
         loaded_pipeline: Optional[Any] = None
         if task_kind == "text2img":
             from pipelines.registry import load_pipeline
-            loaded_pipeline = load_pipeline(model_id=effective_model_id, token=HF_TOKEN, device=DEVICE)
+            loaded_pipeline = load_pipeline(model_id=model_source, token=HF_TOKEN, device=runtime_device)
         
         elif task_kind == "text2video":
             from diffusers import DiffusionPipeline
-            loaded_pipeline = DiffusionPipeline.from_pretrained(model_source, torch_dtype=_torch_dtype(), token=HF_TOKEN)
-            if DEVICE.startswith("cuda"):
-                loaded_pipeline.to(DEVICE)
+            loaded_pipeline = DiffusionPipeline.from_pretrained(
+                model_source,
+                torch_dtype=_torch_dtype(runtime_device),
+                token=HF_TOKEN,
+                local_files_only=os.path.isdir(model_source),
+            )
+            if runtime_device.startswith("cuda"):
+                loaded_pipeline.to(runtime_device)
                 
         elif task_kind == "speech_to_text":
-            loaded_pipeline = _load_speech_to_text_pipeline(model_source)
+            loaded_pipeline = _load_speech_to_text_pipeline(model_source, runtime_device)
 
         elif task_kind == "text_to_speech":
             from transformers import pipeline
@@ -159,7 +198,7 @@ def _load_model_background() -> None:
                 "text-to-audio",
                 model=model_source,
                 token=HF_TOKEN,
-                device=0 if DEVICE.startswith("cuda") else -1,
+                device=0 if runtime_device.startswith("cuda") else -1,
             )
 
         with _state_lock:

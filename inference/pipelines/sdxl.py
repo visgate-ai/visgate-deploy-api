@@ -17,15 +17,35 @@ class SDXLPipeline(BasePipeline):
     def load(self) -> None:
         from diffusers import AutoPipelineForText2Image
 
+        use_local_files = os.path.isdir(self.model_id)
+        dtype = torch.float16 if self.device.startswith("cuda") else torch.float32
+        has_model_index = os.path.exists(os.path.join(self.model_id, "model_index.json")) if use_local_files else False
+        has_config = os.path.exists(os.path.join(self.model_id, "config.json")) if use_local_files else False
+
+        self._log(
+            "INFO",
+            (
+                f"load start source={self.model_id} source_kind={self._describe_source()} "
+                f"device={self.device} dtype={dtype} local_files_only={use_local_files} "
+                f"model_index={has_model_index} config={has_config}"
+            ),
+        )
+        self._log("INFO", "Calling AutoPipelineForText2Image.from_pretrained")
+
         self._pipeline = AutoPipelineForText2Image.from_pretrained(
             self.model_id,
-            torch_dtype=torch.float16,
+            torch_dtype=dtype,
             use_safetensors=True,
             variant="fp16",
             token=self.token,
+            local_files_only=use_local_files,
         )
+        self._log("INFO", "from_pretrained completed")
+        self._log("INFO", f"Moving pipeline to device {self.device}")
         self._pipeline.to(self.device)
+        self._log("INFO", "Pipeline moved to target device")
         # Memory optimizations (best-effort)
+        enabled_optimizations: list[str] = []
         for method in (
             "enable_vae_slicing",
             "enable_vae_tiling",
@@ -33,13 +53,23 @@ class SDXLPipeline(BasePipeline):
         ):
             try:
                 getattr(self._pipeline, method)()
+                enabled_optimizations.append(method)
             except Exception:
                 pass
         # xformers memory-efficient attention (faster if installed)
+        xformers_enabled = False
         try:
             self._pipeline.enable_xformers_memory_efficient_attention()
+            xformers_enabled = True
         except Exception:
             pass
+        self._log(
+            "INFO",
+            (
+                f"Load complete optimizations={enabled_optimizations or ['none']} "
+                f"xformers={xformers_enabled}"
+            ),
+        )
 
     def run(
         self,

@@ -1,5 +1,6 @@
 """Map HF model ID to pipeline class and load the right pipeline."""
 
+import os
 import re
 from typing import Optional, Type
 
@@ -19,6 +20,16 @@ MODEL_REGISTRY: list[tuple[str, Type[BasePipeline]]] = [
     (r"runwayml/stable-diffusion", SDXLPipeline),
     (r"CompVis/stable-diffusion", SDXLPipeline),
 ]
+
+
+def _log(level: str, message: str) -> None:
+    print(message, flush=True)
+    try:
+        from app.runtime_common import log_tunnel
+
+        log_tunnel(level, message)
+    except Exception:
+        pass
 
 
 def get_pipeline_for_model(model_id: str) -> Type[BasePipeline]:
@@ -42,6 +53,9 @@ def load_pipeline(
 ) -> BasePipeline:
     """Load and initialize the appropriate pipeline for the model."""
     pipeline_cls = get_pipeline_for_model(model_id)
+    source_kind = "local-dir" if os.path.isdir(model_id) else "hf-or-remote"
+    _log("INFO", f"Pipeline registry selected {pipeline_cls.__name__} for model_source={model_id} source_kind={source_kind}")
     pipeline = pipeline_cls(model_id=model_id, token=token, device=device)
     pipeline.load()
+    _log("INFO", f"Pipeline registry finished initializing {pipeline_cls.__name__}")
     return pipeline

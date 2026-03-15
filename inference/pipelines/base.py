@@ -1,6 +1,7 @@
 """Base interface for inference pipelines."""
 
 from abc import ABC, abstractmethod
+import os
 from typing import Any, Optional
 
 
@@ -12,6 +13,19 @@ class BasePipeline(ABC):
         self.token = token
         self.device = device
         self._pipeline: Any = None
+
+    def _log(self, level: str, message: str) -> None:
+        prefix = f"[{self.__class__.__name__}] "
+        print(prefix + message, flush=True)
+        try:
+            from app.runtime_common import log_tunnel
+
+            log_tunnel(level, prefix + message)
+        except Exception:
+            pass
+
+    def _describe_source(self) -> str:
+        return "local-dir" if os.path.isdir(self.model_id) else "hf-or-remote"
 
     @abstractmethod
     def load(self) -> None:
