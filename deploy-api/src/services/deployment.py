@@ -529,7 +529,7 @@ async def orchestrate_deployment(
         last_error = None
 
         if provider_name == "vast":
-            # ── Vast.ai Serverless flow: template → endpoint → workergroup ──
+            # ── Vast.ai On-Demand Instance flow: search offers → create instance ──
             vast_cold_workers = max(1, _workers_min(settings, worker_target["profile"], settings.runpod_workers_max))
             try:
                 endpoint_data = await provider.create_endpoint(

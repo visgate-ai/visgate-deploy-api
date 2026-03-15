@@ -139,11 +139,11 @@ async def test_search_offers(provider: VastProvider) -> None:
     offers = [{"id": 1, "gpu_name": "RTX 4090", "dph_total": 0.5}]
 
     async def mock_send(self, request, **kwargs):
-        assert "/api/v0/search/offers/" in str(request.url)
+        assert "/api/v0/bundles/" in str(request.url)
         return _mock_response(200, {"offers": offers})
 
     with patch.object(httpx.AsyncClient, "send", mock_send):
-        result = await provider.search_offers("key", gpu_ram=24000)
+        result = await provider.search_offers("key", gpu_ram_gb=24)
 
     assert len(result) == 1
     assert result[0]["gpu_name"] == "RTX 4090"
@@ -163,7 +163,7 @@ async def test_create_endpoint_success(provider: VastProvider) -> None:
 
     async def mock_send(self, request, **kwargs):
         url = str(request.url)
-        if "/api/v0/search/offers/" in url:
+        if "/api/v0/bundles/" in url:
             call_log.append("search")
             return _mock_response(200, offers_resp)
         if "/api/v0/asks/100/" in url:
@@ -211,7 +211,7 @@ async def test_create_endpoint_no_contract_id(provider: VastProvider) -> None:
 
     async def mock_send(self, request, **kwargs):
         url = str(request.url)
-        if "/api/v0/search/offers/" in url:
+        if "/api/v0/bundles/" in url:
             return _mock_response(200, offers_resp)
         return _mock_response(200, instance_resp)
 

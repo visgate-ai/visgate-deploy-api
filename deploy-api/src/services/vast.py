@@ -13,12 +13,14 @@ Flow:
   5. delete_endpoint  → DELETE /api/v0/instances/<id>/
 
 Auth: Bearer token in Authorization header.
-Management API: https://console.vast.ai
+Management API: https://cloud.vast.ai
 """
 
 from __future__ import annotations
 
 import asyncio
+import json
+import urllib.parse
 from typing import Any
 
 import httpx
@@ -34,7 +36,7 @@ from src.services.base_provider import (
 )
 from src.services.provider_factory import register_provider
 
-_CONSOLE_BASE = "https://console.vast.ai"
+_CONSOLE_BASE = "https://cloud.vast.ai"
 
 # Port the HTTP inference server listens on inside the container.
 _WORKER_HTTP_PORT = 8000
@@ -53,6 +55,7 @@ def _normalize_gpu_name_for_search(gpu_name: str) -> str:
 
 
 def _build_search_params(gpu_ram: int, gpu_names: list[str] | None = None) -> str:
+    """Legacy string format — kept for backward compat in unit tests."""
     parts = ["verified=true", "rentable=true", "rented=false"]
     if gpu_ram > 0:
         parts.append(f"gpu_ram>={gpu_ram}")
@@ -65,6 +68,28 @@ def _build_search_params(gpu_ram: int, gpu_names: list[str] | None = None) -> st
             joined_gpu_names = ", ".join(unique_gpu_names)
             parts.append(f"gpu_name in [{joined_gpu_names}]")
     return " ".join(parts)
+
+
+def _build_query_dict(gpu_ram_gb: int = 0, gpu_names: list[str] | None = None) -> dict[str, Any]:
+    """Build a JSON query dict for the bundles API.
+
+    Format: {"field": {"op": value}, ...}
+    gpu_ram_gb is converted to MB for the API.
+    """
+    q: dict[str, Any] = {
+        "verified": {"eq": True},
+        "rentable": {"eq": True},
+        "rented": {"eq": False},
+    }
+    if gpu_ram_gb > 0:
+        q["gpu_ram"] = {"gte": gpu_ram_gb}  # API uses GB directly
+    normalized = [_normalize_gpu_name_for_search(n) for n in (gpu_names or []) if n]
+    unique = list(dict.fromkeys(normalized))
+    if len(unique) == 1:
+        q["gpu_name"] = {"eq": unique[0]}
+    elif len(unique) > 1:
+        q["gpu_name"] = {"in": unique}
+    return q
 
 
 class VastProvider(BaseInferenceProvider):
@@ -142,14 +167,15 @@ class VastProvider(BaseInferenceProvider):
         self,
         api_key: str,
         *,
-        gpu_ram: int = 0,
+        gpu_ram_gb: int = 0,
         gpu_names: list[str] | None = None,
         order: str = "dph_total",
         limit: int = 10,
     ) -> list[dict[str, Any]]:
-        """Search marketplace for available GPU offers."""
-        search_params = _build_search_params(gpu_ram, gpu_names)
-        path = f"/api/v0/search/offers/?q={search_params}&order={order}&limit={limit}"
+        """Search marketplace for available GPU offers via /api/v0/bundles/."""
+        q = _build_query_dict(gpu_ram_gb, gpu_names)
+        qs = urllib.parse.urlencode({"q": json.dumps(q), "order": order, "limit": limit})
+        path = f"/api/v0/bundles/?{qs}"
         data = await self._request("GET", path, api_key)
         offers = data if isinstance(data, list) else data.get("offers", [])
         return offers
@@ -275,7 +301,7 @@ class VastProvider(BaseInferenceProvider):
         # Search for matching GPU offers
         offers = await self.search_offers(
             api_key,
-            gpu_ram=min_gpu_ram_gb * 1024 if min_gpu_ram_gb else 0,
+            gpu_ram_gb=min_gpu_ram_gb,
             gpu_names=candidate_gpu_names,
         )
         if not offers:
