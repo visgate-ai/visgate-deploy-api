@@ -519,66 +519,70 @@ class VastProvider(BaseInferenceProvider):
         vast_status = instance.get("actual_status", "unknown")
         worker_url = self.extract_worker_url(instance)
 
-        # Instance not running yet
+        # If we have an IP:port, always try probing /health regardless of actual_status
+        # (Vast's actual_status can lag behind real container state)
+        if worker_url:
+            try:
+                async with httpx.AsyncClient(timeout=8.0) as client:
+                    resp = await client.get(f"{worker_url}/health")
+                if resp.status_code == 200:
+                    body = resp.json()
+                    w_ready = body.get("workers", {}).get("ready", 0)
+                    if w_ready > 0:
+                        structured_log(
+                            "INFO",
+                            "Vast instance model ready",
+                            metadata={"instance_id": endpoint_id, "worker_url": worker_url},
+                        )
+                        return {
+                            "status": "ready",
+                            "workers": [{"status": "ready"}],
+                            "running_count": 1,
+                            "total_count": 1,
+                            "worker_url": worker_url,
+                        }
+                    # Server is up but model not loaded yet
+                    return {
+                        "status": "loading",
+                        "workers": [{"status": "model_loading"}],
+                        "running_count": 0,
+                        "total_count": 1,
+                        "worker_url": worker_url,
+                        "health_body": body,
+                    }
+            except Exception as exc:
+                # Server not responding yet (container starting)
+                if vast_status in ("running",):
+                    return {
+                        "status": "loading",
+                        "workers": [{"status": "server_starting"}],
+                        "running_count": 0,
+                        "total_count": 1,
+                        "vast_status": vast_status,
+                        "worker_url": worker_url,
+                        "probe_error": str(exc),
+                    }
+                # Fall through to the status-based return below
+
+        # No worker_url or probe failed with non-running status
         if vast_status not in ("running",):
             return {
-                "status": "loading" if vast_status in ("loading", "creating", "pulling") else vast_status,
+                "status": "loading" if vast_status in ("loading", "creating", "pulling", "downloading") else vast_status,
                 "workers": [{"status": vast_status}],
                 "running_count": 0,
                 "total_count": 1,
                 "vast_status": vast_status,
-            }
-
-        # Instance running but no public IP/port yet
-        if not worker_url:
-            return {
-                "status": "loading",
-                "workers": [{"status": "running_no_port"}],
-                "running_count": 0,
-                "total_count": 1,
-                "vast_status": vast_status,
-            }
-
-        # Instance running with IP:port — probe /health
-        try:
-            async with httpx.AsyncClient(timeout=8.0) as client:
-                resp = await client.get(f"{worker_url}/health")
-            if resp.status_code == 200:
-                body = resp.json()
-                w_ready = body.get("workers", {}).get("ready", 0)
-                if w_ready > 0:
-                    structured_log(
-                        "INFO",
-                        "Vast instance model ready",
-                        metadata={"instance_id": endpoint_id, "worker_url": worker_url},
-                    )
-                    return {
-                        "status": "ready",
-                        "workers": [{"status": "ready"}],
-                        "running_count": 1,
-                        "total_count": 1,
-                        "worker_url": worker_url,
-                    }
-                # Server is up but model not loaded yet
-                return {
-                    "status": "loading",
-                    "workers": [{"status": "model_loading"}],
-                    "running_count": 0,
-                    "total_count": 1,
-                    "worker_url": worker_url,
-                    "health_body": body,
-                }
-        except Exception as exc:
-            # Server not responding yet (container starting)
-            return {
-                "status": "loading",
-                "workers": [{"status": "server_starting"}],
-                "running_count": 0,
-                "total_count": 1,
-                "vast_status": vast_status,
                 "worker_url": worker_url,
-                "probe_error": str(exc),
             }
+
+        # Running but no public IP/port yet
+        return {
+            "status": "loading",
+            "workers": [{"status": "running_no_port"}],
+            "running_count": 0,
+            "total_count": 1,
+            "vast_status": vast_status,
+        }
 
 
 # Register the provider

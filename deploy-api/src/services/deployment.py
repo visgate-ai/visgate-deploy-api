@@ -698,6 +698,17 @@ async def orchestrate_deployment(
             if latest.status in {"ready", "failed", "webhook_failed", "deleted"}:
                 if latest.status in {"failed", "webhook_failed"}:
                     await cleanup_vast_endpoint_if_needed(f"terminal_status_{latest.status}")
+                # If webhook marked Vast deployment ready with a virtual URL,
+                # resolve the actual worker HTTP URL so submit_job can reach it.
+                if latest.status == "ready" and provider_name == "vast" and latest.endpoint_url and latest.endpoint_url.startswith("vast-"):
+                    try:
+                        health = await provider.check_endpoint_health(endpoint_id, provider_api_key)
+                        resolved_url = health.get("worker_url")
+                        if resolved_url:
+                            log_step("INFO", "Resolved Vast worker URL after webhook ready", worker_url=resolved_url)
+                            update_deployment(client, coll, deployment_id, {"endpoint_url": resolved_url})
+                    except Exception as exc:
+                        log_step("WARNING", f"Failed to resolve Vast worker URL: {exc}")
                 return
 
             elapsed = asyncio.get_running_loop().time() - started_at
