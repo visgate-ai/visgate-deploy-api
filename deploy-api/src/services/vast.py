@@ -559,6 +559,10 @@ class VastProvider(BaseInferenceProvider):
         if isinstance(data, str):
             return {"status": "error", "error": data, "workers": []}
 
+        # Vast API may return {"error_msg": "..."} on auth or lookup failures
+        if isinstance(data, dict) and "error_msg" in data:
+            return {"status": "error", "error": data["error_msg"], "workers": []}
+
         # Vast.ai may return a list directly or a dict with a "workers" key
         if isinstance(data, list):
             workers = data

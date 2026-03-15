@@ -687,6 +687,7 @@ async def orchestrate_deployment(
         vast_no_worker_timeout_seconds = 90
         started_at = asyncio.get_running_loop().time()
         no_workers_since: float | None = None
+        vast_hc_count = 0
         while True:
             latest = get_deployment(client, coll, deployment_id)
             if not latest:
@@ -716,8 +717,40 @@ async def orchestrate_deployment(
             if provider_name == "vast":
                 health = await provider.check_endpoint_health(endpoint_id, provider_api_key)
                 running_count = health.get("running_count", 0)
+                total_count = health.get("total_count", 0)
                 status_name = health.get("status")
-                if status_name == "no_workers":
+                # Log every health check for diagnostics
+                vast_hc_count += 1
+                if vast_hc_count <= 5 or vast_hc_count % 10 == 0:
+                    worker_statuses = [w.get("status", "?") for w in health.get("workers", []) if isinstance(w, dict)]
+                    log_step(
+                        "INFO",
+                        f"Vast health check #{vast_hc_count}",
+                        endpoint_id=endpoint_id,
+                        health_status=status_name,
+                        running_count=running_count,
+                        total_count=total_count,
+                        worker_statuses=worker_statuses[:5],
+                        error=health.get("error"),
+                    )
+                if status_name == "error":
+                    now = asyncio.get_running_loop().time()
+                    if no_workers_since is None:
+                        no_workers_since = now
+                        log_step(
+                            "WARNING",
+                            "Vast health check returning error; will timeout if persists",
+                            endpoint_id=endpoint_id,
+                            error=health.get("error"),
+                            timeout_seconds=vast_no_worker_timeout_seconds,
+                        )
+                    elif (now - no_workers_since) > vast_no_worker_timeout_seconds:
+                        message = f"Vast health check error persisted for {vast_no_worker_timeout_seconds}s: {health.get('error')}"
+                        log_step("ERROR", message, endpoint_id=endpoint_id)
+                        update_deployment(client, coll, deployment_id, {"status": "failed", "error": message})
+                        await cleanup_vast_endpoint_if_needed("health_check_error_timeout")
+                        return
+                elif status_name == "no_workers":
                     now = asyncio.get_running_loop().time()
                     if no_workers_since is None:
                         no_workers_since = now
