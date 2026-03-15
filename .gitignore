@@ -57,3 +57,5 @@ cloudflared.log
 istanbul_final.png
 .wrangler/
 vast
+keys.txt
+uv.lock

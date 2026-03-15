@@ -571,12 +571,104 @@ class VastProvider(BaseInferenceProvider):
         # Vast.ai worker statuses: "creating", "loading", "ready", "idle", "stopped", "error"
         _READY_STATUSES = {"ready", "idle"}
         ready_workers = [w for w in workers if isinstance(w, dict) and w.get("status") in _READY_STATUSES]
+
+        # Direct health probe: Vast PyWorker-based readiness may not apply to custom images.
+        # If workers exist but none are Vast-ready, try probing the worker's HTTP /health directly.
+        if not ready_workers and workers:
+            probe_url = await self._find_probe_url(workers, endpoint_id, api_key)
+            if probe_url:
+                try:
+                    async with httpx.AsyncClient(timeout=8.0) as client:
+                        resp = await client.get(f"{probe_url}/health")
+                    if resp.status_code == 200:
+                        body = resp.json()
+                        w_ready = body.get("workers", {}).get("ready", 0)
+                        if w_ready > 0:
+                            structured_log(
+                                "INFO",
+                                "Direct health probe: worker model ready (bypassing Vast status)",
+                                metadata={"endpoint_id": endpoint_id, "probe_url": probe_url},
+                            )
+                            return {
+                                "status": "ready",
+                                "workers": workers,
+                                "running_count": 1,
+                                "total_count": len(workers),
+                                "direct_probe_url": probe_url,
+                            }
+                        else:
+                            structured_log(
+                                "DEBUG",
+                                "Direct health probe: model not ready yet",
+                                metadata={"endpoint_id": endpoint_id, "probe_url": probe_url, "body": body},
+                            )
+                except Exception as probe_exc:
+                    structured_log(
+                        "DEBUG",
+                        "Direct health probe failed",
+                        metadata={"endpoint_id": endpoint_id, "probe_url": probe_url, "error": str(probe_exc)},
+                    )
+
         return {
             "status": "ready" if ready_workers else ("loading" if workers else "no_workers"),
             "workers": workers,
             "running_count": len(ready_workers),
             "total_count": len(workers),
         }
+
+    @staticmethod
+    def _extract_worker_url(worker: dict[str, Any]) -> str | None:
+        """Try to extract a public HTTP URL from a Vast worker dict."""
+        # Vast may include public_ipaddr + ports mapping
+        ip = worker.get("public_ipaddr") or worker.get("ip_addr") or worker.get("addr")
+        if ip:
+            ports = worker.get("ports", {})
+            # Look for port 8000/tcp mapping (our inference server port)
+            tcp_8000 = ports.get("8000/tcp")
+            if isinstance(tcp_8000, list) and tcp_8000:
+                host_port = tcp_8000[0].get("HostPort")
+                if host_port:
+                    return f"http://{ip}:{host_port}"
+            # Try direct port 8000 if ports not mapped
+            if not ports:
+                return f"http://{ip}:8000"
+        return None
+
+    async def _find_probe_url(
+        self,
+        workers: list[dict[str, Any]],
+        endpoint_id: str,
+        api_key: str,
+    ) -> str | None:
+        """Return a probe URL for the first loading worker.
+
+        Strategy:
+          1. Extract IP:port directly from the worker dict (cheapest).
+          2. Fall back to calling the /route/ API which may return a URL
+             even if the worker is still loading.
+        """
+        for w in workers:
+            if not isinstance(w, dict):
+                continue
+            w_status = w.get("status", "")
+            if w_status not in ("loading", "model_loading"):
+                continue
+            url = self._extract_worker_url(w)
+            if url:
+                return url
+
+        # Fallback: ask the Vast router for a worker URL
+        return await self._route_probe_url(endpoint_id, api_key)
+
+    async def _route_probe_url(self, endpoint_id: str, api_key: str) -> str | None:
+        """Call /route/ and return the worker URL if available."""
+        try:
+            route_resp = await self.route_request(api_key, endpoint_id)
+            if isinstance(route_resp, dict) and route_resp.get("url"):
+                return route_resp["url"].rstrip("/")
+        except Exception:
+            pass
+        return None
 
 
 # Register the provider

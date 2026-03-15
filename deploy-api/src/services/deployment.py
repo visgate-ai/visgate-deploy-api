@@ -723,16 +723,22 @@ async def orchestrate_deployment(
                 vast_hc_count += 1
                 if vast_hc_count <= 5 or vast_hc_count % 10 == 0:
                     worker_statuses = [w.get("status", "?") for w in health.get("workers", []) if isinstance(w, dict)]
-                    log_step(
-                        "INFO",
-                        f"Vast health check #{vast_hc_count}",
-                        endpoint_id=endpoint_id,
-                        health_status=status_name,
-                        running_count=running_count,
-                        total_count=total_count,
-                        worker_statuses=worker_statuses[:5],
-                        error=health.get("error"),
-                    )
+                    extra_meta: dict[str, Any] = {
+                        "endpoint_id": endpoint_id,
+                        "health_status": status_name,
+                        "running_count": running_count,
+                        "total_count": total_count,
+                        "worker_statuses": worker_statuses[:5],
+                        "error": health.get("error"),
+                    }
+                    # Log raw worker keys for first 3 checks to debug field availability
+                    if vast_hc_count <= 3:
+                        raw_workers = health.get("workers", [])
+                        if raw_workers and isinstance(raw_workers[0], dict):
+                            extra_meta["worker_keys"] = sorted(raw_workers[0].keys())[:20]
+                    if health.get("direct_probe_url"):
+                        extra_meta["direct_probe_url"] = health["direct_probe_url"]
+                    log_step("INFO", f"Vast health check #{vast_hc_count}", **extra_meta)
                 if status_name == "error":
                     now = asyncio.get_running_loop().time()
                     if no_workers_since is None:
