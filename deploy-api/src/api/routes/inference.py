@@ -44,6 +44,13 @@ from src.services.provider_factory import get_provider
 router = APIRouter(prefix="/v1/inference/jobs", tags=["inference"])
 
 
+def _resolve_provider_api_key(provider_name: str, user_runpod_key: str) -> str:
+    """Return the correct API key for the given provider."""
+    if provider_name == "vast":
+        return get_settings().vast_api_key or ""
+    return user_runpod_key
+
+
 def _get_repo():
     if get_settings().effective_use_memory_repo:
         import src.services.memory_repo as repo
@@ -197,9 +204,10 @@ async def create_inference_job(
             gpu_price_per_hour_usd = resolve_gpu_hourly_price(deployment.gpu_allocated, gpu_types)
         except Exception:
             gpu_price_per_hour_usd = None
+    provider_api_key = _resolve_provider_api_key(deployment.provider or "runpod", ctx.runpod_api_key)
     accepted = await provider.submit_job(
         deployment.endpoint_url,
-        ctx.runpod_api_key,
+        provider_api_key,
         staged_input,
         webhook_url=provider_webhook,
         policy=body.policy.model_dump(exclude_none=True) if body.policy else None,
@@ -271,7 +279,8 @@ async def get_inference_job(
     if not doc or doc.user_hash != ctx.user_hash:
         raise InferenceJobNotFoundError(job_id)
     if refresh and doc.status not in {"completed", "failed", "cancelled", "expired"}:
-        doc = await _refresh_job_status(doc, ctx.runpod_api_key, firestore_client)
+        api_key = _resolve_provider_api_key(doc.provider or "runpod", ctx.runpod_api_key)
+        doc = await _refresh_job_status(doc, api_key, firestore_client)
     return _job_to_response(doc)
 
 
@@ -286,7 +295,8 @@ async def cancel_inference_job(
     if not doc or doc.user_hash != ctx.user_hash:
         raise InferenceJobNotFoundError(job_id)
     provider = get_provider(doc.provider)
-    result = await provider.cancel_job(doc.endpoint_url, doc.provider_job_id, ctx.runpod_api_key)
+    cancel_api_key = _resolve_provider_api_key(doc.provider or "runpod", ctx.runpod_api_key)
+    result = await provider.cancel_job(doc.endpoint_url, doc.provider_job_id, cancel_api_key)
     updates = {
         "provider_status": result.get("status", "CANCELLED"),
         "status": map_provider_status(result.get("status", "CANCELLED")),
@@ -311,7 +321,8 @@ async def retry_inference_job(
     if not doc or doc.user_hash != ctx.user_hash:
         raise InferenceJobNotFoundError(job_id)
     provider = get_provider(doc.provider)
-    result = await provider.retry_job(doc.endpoint_url, doc.provider_job_id, ctx.runpod_api_key)
+    retry_api_key = _resolve_provider_api_key(doc.provider or "runpod", ctx.runpod_api_key)
+    result = await provider.retry_job(doc.endpoint_url, doc.provider_job_id, retry_api_key)
     updates = {
         "provider_status": result.get("status", "IN_QUEUE"),
         "status": map_provider_status(result.get("status", "IN_QUEUE")),
