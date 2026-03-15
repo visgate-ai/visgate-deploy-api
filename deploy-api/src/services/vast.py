@@ -105,7 +105,7 @@ class VastProvider(BaseInferenceProvider):
         last_exc: Exception | None = None
         for attempt in range(_max_retries):
             try:
-                async with httpx.AsyncClient(timeout=timeout) as client:
+                async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
                     resp = await client.request(
                         method,
                         url,
