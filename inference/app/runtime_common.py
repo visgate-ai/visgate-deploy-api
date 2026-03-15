@@ -21,6 +21,24 @@ from app.config import (
 )
 
 
+def _emit_log(level: str, message: str) -> None:
+    log_tunnel(level, message)
+    print(mask_sensitive(message))
+
+
+def _format_bytes(num_bytes: int) -> str:
+    units = ["B", "KB", "MB", "GB", "TB"]
+    value = float(num_bytes)
+    unit = units[0]
+    for unit in units:
+        if value < 1024.0 or unit == units[-1]:
+            break
+        value /= 1024.0
+    if unit == "B":
+        return f"{int(value)}{unit}"
+    return f"{value:.1f}{unit}"
+
+
 def mask_sensitive(text: str) -> str:
     if not text:
         return text
@@ -118,6 +136,11 @@ def download_r2_artifact_to_tempfile(artifact: dict[str, Any], suffix: str) -> s
     tmp_path = ""
     with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
         tmp_path = tmp.name
+    started_at = time.time()
+    _emit_log(
+        "INFO",
+        f"R2 input download started: bucket={bucket_name} key={object_key} target={tmp_path}",
+    )
     try:
         env = os.environ.copy()
         env["AWS_ACCESS_KEY_ID"] = access_key
@@ -137,8 +160,25 @@ def download_r2_artifact_to_tempfile(artifact: dict[str, Any], suffix: str) -> s
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
         )
+        file_size = os.path.getsize(tmp_path) if os.path.exists(tmp_path) else 0
+        elapsed_ms = max(int((time.time() - started_at) * 1000), 0)
+        _emit_log(
+            "INFO",
+            (
+                f"R2 input download completed: bucket={bucket_name} key={object_key} "
+                f"bytes={file_size} ({_format_bytes(file_size)}) duration_ms={elapsed_ms}"
+            ),
+        )
         return tmp_path
-    except Exception:
+    except Exception as exc:
+        elapsed_ms = max(int((time.time() - started_at) * 1000), 0)
+        _emit_log(
+            "ERROR",
+            (
+                f"R2 input download failed: bucket={bucket_name} key={object_key} "
+                f"duration_ms={elapsed_ms} error={exc}"
+            ),
+        )
         if tmp_path and os.path.exists(tmp_path):
             os.remove(tmp_path)
         raise
@@ -197,12 +237,20 @@ def upload_bytes(
     )
     if not upload_target:
         message = f"Artifact upload skipped: missing output S3 config for extension={extension}"
-        log_tunnel("WARNING", message)
+        _emit_log("WARNING", message)
         if required:
             raise RuntimeError(message)
         return None
 
     tmp_path = ""
+    started_at = time.time()
+    _emit_log(
+        "INFO",
+        (
+            f"R2 output upload started: target={upload_target} content_type={content_type} "
+            f"bytes={len(data)} ({_format_bytes(len(data))})"
+        ),
+    )
     try:
         with tempfile.NamedTemporaryFile(suffix=f".{extension.lstrip('.')}", delete=False) as tmp:
             tmp.write(data)
@@ -220,8 +268,7 @@ def upload_bytes(
             subprocess.run(["s5cmd", "version"], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             subprocess.run(cmd, check=True, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         except Exception as exc:
-            log_tunnel("WARNING", f"s5cmd upload failed, retrying with boto3: {exc}")
-            print(f"s5cmd upload failed, retrying with boto3: {exc}")
+            _emit_log("WARNING", f"s5cmd upload failed, retrying with boto3: {exc}")
             if not bucket_name or not object_key or not s3_config:
                 raise
             _upload_with_boto3(tmp_path, s3_config, bucket_name, object_key, content_type)
@@ -229,7 +276,14 @@ def upload_bytes(
         url = object_url or upload_target
         if CDN_BASE_URL and object_key:
             url = f"{CDN_BASE_URL.rstrip('/')}/{object_key}"
-        log_tunnel("INFO", f"Artifact uploaded: {object_key}")
+        elapsed_ms = max(int((time.time() - started_at) * 1000), 0)
+        _emit_log(
+            "INFO",
+            (
+                f"R2 output upload completed: key={object_key} duration_ms={elapsed_ms} "
+                f"bytes={len(data)} url={url}"
+            ),
+        )
         return {
             "bucket_name": bucket_name,
             "endpoint_url": endpoint_url,
@@ -239,8 +293,8 @@ def upload_bytes(
             "bytes": len(data),
         }
     except Exception as exc:
-        log_tunnel("ERROR", f"Artifact upload failed: {exc}")
-        print(f"Artifact upload failed: {exc}")
+        elapsed_ms = max(int((time.time() - started_at) * 1000), 0)
+        _emit_log("ERROR", f"Artifact upload failed after {elapsed_ms}ms: {exc}")
         if required:
             raise RuntimeError(f"Artifact upload failed: {exc}") from exc
         return None
@@ -263,6 +317,8 @@ def download_to_tempfile(url: str, suffix: str) -> str:
     tmp_path = ""
     with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
         tmp_path = tmp.name
+    started_at = time.time()
+    _emit_log("INFO", f"Remote input download started: url={url} target={tmp_path}")
     try:
         written = 0
         with urllib.request.urlopen(url, timeout=60) as response:
@@ -278,8 +334,15 @@ def download_to_tempfile(url: str, suffix: str) -> str:
                     if written > max_bytes:
                         raise ValueError("Input file exceeds MAX_INPUT_DOWNLOAD_BYTES")
                     out.write(chunk)
+        elapsed_ms = max(int((time.time() - started_at) * 1000), 0)
+        _emit_log(
+            "INFO",
+            f"Remote input download completed: url={url} bytes={written} ({_format_bytes(written)}) duration_ms={elapsed_ms}",
+        )
         return tmp_path
-    except Exception:
+    except Exception as exc:
+        elapsed_ms = max(int((time.time() - started_at) * 1000), 0)
+        _emit_log("ERROR", f"Remote input download failed after {elapsed_ms}ms: url={url} error={exc}")
         if tmp_path and os.path.exists(tmp_path):
             os.remove(tmp_path)
         raise
